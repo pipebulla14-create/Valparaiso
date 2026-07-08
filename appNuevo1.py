@@ -9,6 +9,7 @@ import rasterio
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 import io, base64
 from PIL import Image
+import matplotlib.pyplot as plt
 
 # ─────────────────────────────────────────────────────────────
 # Configuración
@@ -400,6 +401,77 @@ for html in leyendas_html:
 folium.LayerControl(collapsed=False).add_to(m)
 
 st_folium(m, width=1200, height=650)
+
+# ─────────────────────────────────────────────────────────────
+# PASO 8: Panel de análisis interactivo por capa
+# (Funcionalidades avanzadas: panel de estadísticas, gráfico, tabla de atributos)
+# ─────────────────────────────────────────────────────────────
+
+st.markdown("---")
+st.header("📊 Panel de análisis por capa")
+
+# Columna categórica relevante para cada capa (usada en el gráfico de barras)
+COLUMNA_CATEGORICA_POR_CAPA = {
+    "plantacion": "especie_t",
+    "vial": "Clase_Ruta",
+    "red": "Clase_Ruta",
+    "magnitud": "COMUNA",
+    "incen": "COMUNA",
+}
+
+if capas_activas:
+    capa_analisis = st.selectbox("Selecciona una capa para analizar en detalle:", capas_activas, key="capa_analisis")
+    gdf_sel = capas[capa_analisis]
+    # Reproyectar a un CRS métrico (UTM 19S, la misma zona de tus datos) para área/longitud reales
+    gdf_metric = gdf_sel.to_crs(32719)
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        st.metric("N° de elementos", f"{len(gdf_sel):,}")
+
+    geom_type = gdf_sel.geom_type.iloc[0] if len(gdf_sel) > 0 else ""
+    if "Polygon" in geom_type:
+        area_total_ha = gdf_metric.geometry.area.sum() / 10_000
+        with col_b:
+            st.metric("Superficie total", f"{area_total_ha:,.1f} ha")
+    elif "Line" in geom_type:
+        long_total_km = gdf_metric.geometry.length.sum() / 1_000
+        with col_b:
+            st.metric("Longitud total", f"{long_total_km:,.1f} km")
+
+    # ── Gráfico de barras por categoría ──────────────────────
+    nombre_low = capa_analisis.lower()
+    col_categoria = next((v for k, v in COLUMNA_CATEGORICA_POR_CAPA.items() if k in nombre_low), None)
+
+    if col_categoria and col_categoria in gdf_sel.columns:
+        conteo = gdf_sel[col_categoria].value_counts().sort_values(ascending=False)
+        with col_c:
+            st.metric("N° de categorías", len(conteo))
+
+        fig, ax = plt.subplots(figsize=(7, 3))
+        conteo.plot(kind="bar", ax=ax, color="#E05000")
+        ax.set_ylabel("N° de elementos")
+        ax.set_xlabel(col_categoria)
+        ax.set_title(f"Distribución por {col_categoria} — {capa_analisis}")
+        plt.xticks(rotation=40, ha="right")
+        plt.tight_layout()
+        st.pyplot(fig)
+
+    # ── Tabla de atributos interactiva (ordenable/buscable) ──
+    st.subheader("Tabla de atributos")
+    cols_mostrar = [c for c in gdf_sel.columns if c != "geometry"]
+    st.dataframe(gdf_sel[cols_mostrar], use_container_width=True, height=300)
+
+    # ── Descarga de la capa filtrada/activa ──────────────────
+    csv_bytes = gdf_sel[cols_mostrar].to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label=f"⬇️ Descargar {capa_analisis} como CSV",
+        data=csv_bytes,
+        file_name=f"{capa_analisis.replace(' ', '_')}.csv",
+        mime="text/csv",
+    )
+else:
+    st.info("Activa al menos una capa vectorial en el sidebar para ver su análisis.")
 
 # ─────────────────────────────────────────────────────────────
 # Métricas Sidebar (Funcionalidad Avanzada)
