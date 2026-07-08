@@ -1,4 +1,6 @@
 import streamlit as st
+import os
+os.environ["SHAPE_RESTORE_SHX"] = "YES"  # AreasPobladas/AreasSnaspe llegaron sin .shx
 import geopandas as gpd
 import folium
 from folium import plugins
@@ -51,6 +53,17 @@ COLORES_SEVERIDAD = {
     3: (255, 0, 0),      # Alta - rojo
 }
 ETIQUETAS_SEVERIDAD = {1: "Baja (0.10–0.27)", 2: "Moderada (0.27–0.44)", 3: "Alta (≥ 0.44)"}
+
+# Uso/cobertura de vegetación — categorías inferidas cruzando el CSV de muestra
+# (NDVI_PRE promedio por código) con los colores dominantes del raster exportado.
+# Ordenadas de mayor a menor vigor vegetal.
+LEYENDA_USO_VEGETACION = {
+    "Bosque nativo / vegetación densa": "#006400",
+    "Plantación forestal": "#d95f02",
+    "Matorral": "#bdbdbd",
+    "Pradera / herbáceo": "#fee08b",
+    "Suelo desnudo / cuerpos de agua": "#80b1d3",
+}
 
 # Encoding específico por shapefile (Red_Vial1 viene en cp1252, el resto en latin-1)
 ENCODING_POR_ARCHIVO = {
@@ -144,7 +157,32 @@ def _reproyectar_a_4326(src, n_bandas):
     return data, bounds_wgs84
 
 
-def procesar_raster_rgb(raster_path):
+def procesar_raster_prerenderizado(raster_path, umbral_transparencia=10):
+    """Convierte un raster de 3 bandas YA RENDERIZADO en color (ej. exportado con
+    .visualize() desde GEE o un render de QGIS) en imagen para Folium.
+    A diferencia de procesar_raster_rgb, NO aplica estiramiento de percentiles
+    (eso distorsionaría colores que ya son la simbología final).
+    Los píxeles casi negros (fondo/fuera del ROI) se vuelven transparentes."""
+    with rasterio.open(raster_path) as src:
+        n_bandas = min(3, src.count)
+        data, bounds_wgs84 = _reproyectar_a_4326(src, n_bandas)
+
+        rgb = np.clip(data, 0, 255).astype(np.uint8)
+        rgb = np.transpose(rgb, (1, 2, 0))  # (H, W, 3)
+
+        rgba = np.zeros((rgb.shape[0], rgb.shape[1], 4), dtype=np.uint8)
+        rgba[..., :3] = rgb
+        # Transparente donde el píxel es (casi) negro = fondo/fuera del ROI
+        opaco = np.max(rgb, axis=-1) > umbral_transparencia
+        rgba[..., 3] = np.where(opaco, 255, 0)
+
+        img_pil = Image.fromarray(rgba)
+        buf = io.BytesIO()
+        img_pil.save(buf, format="PNG")
+        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        bounds = [[bounds_wgs84[1], bounds_wgs84[0]], [bounds_wgs84[3], bounds_wgs84[2]]]
+
+        return img_b64, bounds
     """Convierte un raster multiespectral (>=3 bandas) en imagen RGB renderizable para Folium."""
     with rasterio.open(raster_path) as src:
         n_bandas = min(3, src.count)
@@ -234,8 +272,11 @@ for archivo in archivos_vec:
     enc = ENCODING_POR_ARCHIVO.get(archivo.stem, "utf-8")
     try:
         gdf = gpd.read_file(archivo, encoding=enc)
-        if gdf.crs is not None:
-            gdf = gdf.to_crs(4326)
+        if gdf.crs is None:
+            # Shapefiles subidos sin .prj (ej. AreasPobladas, AreasSnaspe):
+            # sus bounds coinciden con Web Mercator para la zona de Valparaíso.
+            gdf = gdf.set_crs("EPSG:3857", allow_override=True)
+        gdf = gdf.to_crs(4326)
         capas[nombre] = gdf
     except Exception as e:
         st.warning(f"No fue posible cargar {archivo.name}: {e}")
@@ -274,7 +315,7 @@ for nombre in rasters_activos:
     nombre_low = nombre.lower()
     try:
         with st.spinner(f"Procesando {nombre}..."):
-            # Bifurcación clave: DEM (continuo) vs. severidad (1 banda clasificada) vs. satelital (RGB)
+            # Bifurcación por tipo de raster
             if "dem" in nombre_low:
                 img_b64, bounds, vmin, vmax = procesar_raster_continuo(rasters[nombre], cmap_name="terrain")
                 icono = "⛰️"
@@ -291,12 +332,41 @@ for nombre in rasters_activos:
                 icono = "🔥"
                 leyendas_html.append(
                     leyenda_categorica_html(
-                        "Severidad del incendio",
+                        "Severidad del incendio (dNBR)",
                         {ETIQUETAS_SEVERIDAD[k]: f"rgb{v}" for k, v in COLORES_SEVERIDAD.items()},
                         "🔥", f"{offset_top}px", "10px"
                     )
                 )
                 offset_top += 140
+            elif "usovegetacion" in nombre_low.replace(" ", ""):
+                img_b64, bounds = procesar_raster_prerenderizado(rasters[nombre])
+                icono = "🌿"
+                leyendas_html.append(
+                    leyenda_categorica_html("Uso / cobertura de vegetación", LEYENDA_USO_VEGETACION, "🌿", f"{offset_top}px", "10px")
+                )
+                offset_top += 40 + 20 * len(LEYENDA_USO_VEGETACION)
+            elif "perdida" in nombre_low and "ndvi" in nombre_low:
+                img_b64, bounds = procesar_raster_prerenderizado(rasters[nombre])
+                icono = "📉"
+                leyendas_html.append(
+                    leyenda_categorica_html(
+                        "Pérdida de NDVI (%)",
+                        {"Baja pérdida": "#ffffcc", "Pérdida media": "#fd8d3c", "Pérdida alta": "#800026"},
+                        "📉", f"{offset_top}px", "10px"
+                    )
+                )
+                offset_top += 100
+            elif "dnbr" in nombre_low and ("pre" in nombre_low or "post" in nombre_low):
+                img_b64, bounds = procesar_raster_prerenderizado(rasters[nombre])
+                icono = "🔄"
+                leyendas_html.append(
+                    leyenda_categorica_html(
+                        "dNBR ex-ante − ex-post",
+                        {"Ganancia / recuperación": "#006400", "Sin cambio": "#ffffbf", "Pérdida / daño": "#d7191c"},
+                        "🔄", f"{offset_top}px", "10px"
+                    )
+                )
+                offset_top += 100
             else:
                 img_b64, bounds = procesar_raster_rgb(rasters[nombre])
                 icono = "🛰"
@@ -381,6 +451,34 @@ for nombre in capas_activas:
         ).add_to(m)
         leyendas_html.append(
             leyenda_categorica_html("Incendios (perímetro)", {"Área quemada": "#FF0000"}, "🔥", f"{offset_top}px", "10px")
+        )
+        offset_top += 60
+
+    # ── Áreas Pobladas (urbano) ────────────────────────────────
+    elif "poblada" in nombre_low or "urbano" in nombre_low:
+        folium.GeoJson(
+            gdf, name=f"🏙️ {nombre}",
+            style_function=lambda x: {"fillColor": "#B22222", "color": "#7A1515", "weight": 1, "fillOpacity": 0.45},
+            tooltip="Área poblada" if gdf.columns.difference(["geometry"]).empty else folium.GeoJsonTooltip(
+                fields=list(gdf.columns.difference(["geometry"]))[:2]
+            )
+        ).add_to(m)
+        leyendas_html.append(
+            leyenda_categorica_html("Área urbana", {"Zona poblada": "#B22222"}, "🏙️", f"{offset_top}px", "10px")
+        )
+        offset_top += 60
+
+    # ── Áreas SNASPE (protegidas) ──────────────────────────────
+    elif "snaspe" in nombre_low:
+        folium.GeoJson(
+            gdf, name=f"🌲🛡️ {nombre}",
+            style_function=lambda x: {"fillColor": "#2E7D32", "color": "#1B5E20", "weight": 2, "fillOpacity": 0.25, "dashArray": "4, 4"},
+            tooltip="Área silvestre protegida (SNASPE)" if gdf.columns.difference(["geometry"]).empty else folium.GeoJsonTooltip(
+                fields=list(gdf.columns.difference(["geometry"]))[:2]
+            )
+        ).add_to(m)
+        leyendas_html.append(
+            leyenda_categorica_html("Áreas protegidas", {"SNASPE": "#2E7D32"}, "🛡️", f"{offset_top}px", "10px")
         )
         offset_top += 60
 
