@@ -183,33 +183,9 @@ def _reproyectar_a_4326(src, n_bandas):
     return data, bounds_wgs84
 
 
-def procesar_raster_prerenderizado(raster_path, umbral_transparencia=10):
-    """Convierte un raster de 3 bandas YA RENDERIZADO en color (ej. exportado con
-    .visualize() desde GEE o un render de QGIS) en imagen para Folium.
-    A diferencia de procesar_raster_rgb, NO aplica estiramiento de percentiles
-    (eso distorsionaría colores que ya son la simbología final).
-    Los píxeles casi negros (fondo/fuera del ROI) se vuelven transparentes."""
-    with rasterio.open(raster_path) as src:
-        n_bandas = min(3, src.count)
-        data, bounds_wgs84 = _reproyectar_a_4326(src, n_bandas)
-
-        rgb = np.clip(data, 0, 255).astype(np.uint8)
-        rgb = np.transpose(rgb, (1, 2, 0))  # (H, W, 3)
-
-        rgba = np.zeros((rgb.shape[0], rgb.shape[1], 4), dtype=np.uint8)
-        rgba[..., :3] = rgb
-        # Transparente donde el píxel es (casi) negro = fondo/fuera del ROI
-        opaco = np.max(rgb, axis=-1) > umbral_transparencia
-        rgba[..., 3] = np.where(opaco, 255, 0)
-
-        img_pil = Image.fromarray(rgba)
-        buf = io.BytesIO()
-        img_pil.save(buf, format="PNG")
-        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-        bounds = [[bounds_wgs84[1], bounds_wgs84[0]], [bounds_wgs84[3], bounds_wgs84[2]]]
-
-        return img_b64, bounds
-    """Convierte un raster multiespectral (>=3 bandas) en imagen RGB renderizable para Folium."""
+def procesar_raster_rgb(raster_path):
+    """Convierte un raster multiespectral (>=3 bandas, sin colorear) en imagen RGB
+    renderizable para Folium, aplicando estiramiento de percentiles 2-98%."""
     with rasterio.open(raster_path) as src:
         n_bandas = min(3, src.count)
         data, bounds_wgs84 = _reproyectar_a_4326(src, n_bandas)
@@ -254,6 +230,48 @@ def procesar_raster_severidad(raster_path):
         bounds = [[bounds_wgs84[1], bounds_wgs84[0]], [bounds_wgs84[3], bounds_wgs84[2]]]
 
         return img_b64, bounds
+
+
+def procesar_raster_prerenderizado(raster_path, umbral_transparencia=10):
+    """Convierte un raster de 3 bandas YA RENDERIZADO en color (ej. exportado con
+    .visualize() desde GEE) en imagen para Folium. NO aplica estiramiento de
+    percentiles (eso distorsionaría colores que ya son la simbología final).
+    Los píxeles casi negros (fondo/fuera del ROI) se vuelven transparentes."""
+    with rasterio.open(raster_path) as src:
+        n_bandas = min(3, src.count)
+        data, bounds_wgs84 = _reproyectar_a_4326(src, n_bandas)
+
+        rgb = np.clip(data, 0, 255).astype(np.uint8)
+        rgb = np.transpose(rgb, (1, 2, 0))  # (H, W, 3)
+
+        rgba = np.zeros((rgb.shape[0], rgb.shape[1], 4), dtype=np.uint8)
+        rgba[..., :3] = rgb
+        opaco = np.max(rgb, axis=-1) > umbral_transparencia
+        rgba[..., 3] = np.where(opaco, 255, 0)
+
+        img_pil = Image.fromarray(rgba)
+        buf = io.BytesIO()
+        img_pil.save(buf, format="PNG")
+        img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        bounds = [[bounds_wgs84[1], bounds_wgs84[0]], [bounds_wgs84[3], bounds_wgs84[2]]]
+
+        return img_b64, bounds
+
+
+def leyenda_gradiente_html(titulo, colores_css, etiqueta_min, etiqueta_max, icono="🎨",
+                            posicion_top="10px", posicion_right="10px"):
+    """Leyenda de barra de gradiente (para rasters continuos), coherente en estilo
+    con leyenda_categorica_html."""
+    stops = ", ".join(colores_css)
+    barra = f"background: linear-gradient(to right, {stops}); height:14px; border-radius:3px; border:1px solid #999;"
+    return f"""
+    <div style="position:fixed;top:{posicion_top};right:{posicion_right};z-index:1000;background:rgba(255,255,255,0.93);padding:10px 14px;border-radius:8px;border:1px solid #bbb;box-shadow:2px 2px 6px rgba(0,0,0,0.25);font-family:Arial, sans-serif;width:220px;">
+      <b style="font-size:12px;">{icono} {titulo}</b><hr style="margin:5px 0;border-color:#ddd;">
+      <div style="{barra}"></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;margin-top:3px;">
+        <span>{etiqueta_min}</span><span>{etiqueta_max}</span>
+      </div>
+    </div>"""
 
 
 def procesar_raster_continuo(raster_path, cmap_name="terrain", nodata_override=None):
