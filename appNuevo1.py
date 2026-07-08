@@ -54,6 +54,32 @@ COLORES_SEVERIDAD = {
 }
 ETIQUETAS_SEVERIDAD = {1: "Baja (0.10–0.27)", 2: "Moderada (0.27–0.44)", 3: "Alta (≥ 0.44)"}
 
+# Etiquetas de Uso de Vegetación — inferidas a partir de las estadísticas reales
+# de NDVI pre-incendio en Muestra_NDVI_dNBR_Severidad_Uso.csv (no oficiales de CONAF,
+# sino una interpretación razonable según el valor de NDVI típico de cada clase):
+#   Uso 1: NDVI_PRE medio 0.65 (más alto)  -> vegetación densa / bosque
+#   Uso 2: NDVI_PRE medio 0.46             -> vegetación arbustiva / matorral
+#   Uso 3: NDVI_PRE medio 0.26 (n=7, poco representado) -> herbáceo / pradera
+#   Uso 4: NDVI_PRE medio 0.35             -> suelo agrícola / mixto
+#   Uso 5: NDVI_PRE medio -0.07 (negativo) -> área urbana / sin vegetación
+ETIQUETAS_USO_VEGETACION = {
+    1: "Bosque / vegetación densa",
+    2: "Matorral / vegetación arbustiva",
+    3: "Pradera / herbáceo",
+    4: "Suelo agrícola / mixto",
+    5: "Área urbana / sin vegetación",
+}
+COLORES_USO_VEGETACION = {
+    1: "#006400",  # verde oscuro - bosque
+    2: "#66A61E",  # verde claro - matorral
+    3: "#E6C619",  # amarillo - pradera
+    4: "#E05000",  # naranjo - agrícola/mixto
+    5: "#B0B0B0",  # gris - urbano/sin vegetación
+}
+
+COLOR_AREAS_POBLADAS = "#CC0000"
+COLOR_AREAS_SNASPE = "#1B5E20"
+
 # Uso/cobertura de vegetación — categorías inferidas cruzando el CSV de muestra
 # (NDVI_PRE promedio por código) con los colores dominantes del raster exportado.
 # Ordenadas de mayor a menor vigor vegetal.
