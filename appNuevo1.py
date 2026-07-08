@@ -59,14 +59,15 @@ ENCODING_POR_ARCHIVO = {
 }
 
 ESTILOS_TIPO_TRANSPORTE = {
-    "autopista":        {"color": "#CC0000", "weight": 4},
-    "ruta":             {"color": "#E05000", "weight": 3},
-    "camino":           {"color": "#FF8800", "weight": 2},
-    "pavimentado":      {"color": "#E05000", "weight": 3},
-    "ripio":            {"color": "#DAA520", "weight": 2},
-    "tierra":           {"color": "#8B6914", "weight": 2},
-    "default":          {"color": "#888888", "weight": 2},
+    0: {"color": "#CC0000", "weight": 4},
+    1: {"color": "#CC0000", "weight": 4},
+    2: {"color": "#E05000", "weight": 3},
+    3: {"color": "#FF8800", "weight": 2.5},
+    5: {"color": "#DAA520", "weight": 2},
+    7: {"color": "#8B6914", "weight": 1.5},
+    9: {"color": "#999999", "weight": 1},
 }
+ESTILO_VIAL_DEFAULT = {"color": "#888888", "weight": 1}
 
 # ─────────────────────────────────────────────────────────────
 # PASO 2: Funciones de color dinámico
@@ -89,11 +90,13 @@ def crear_style_uso_suelo(col):
 
 def crear_style_transporte(col_tipo):
     def style_fn(feature):
-        tipo = str(feature["properties"].get(col_tipo, "")).lower()
-        for key, vals in ESTILOS_TIPO_TRANSPORTE.items():
-            if key in tipo:
-                return {"color": vals["color"], "weight": vals["weight"], "opacity": 0.9}
-        return {"color": ESTILOS_TIPO_TRANSPORTE["default"]["color"], "weight": 2, "opacity": 0.9}
+        raw = feature["properties"].get(col_tipo)
+        try:
+            codigo = int(raw)
+        except (TypeError, ValueError):
+            codigo = None
+        vals = ESTILOS_TIPO_TRANSPORTE.get(codigo, ESTILO_VIAL_DEFAULT)
+        return {"color": vals["color"], "weight": vals["weight"], "opacity": 0.9}
     return style_fn
 
 def crear_style_perimetro():
@@ -356,6 +359,14 @@ for nombre in capas_activas:
                 aliases=["Nombre ruta:", "Clase:"]
             )
         ).add_to(m)
+        # Leyenda dinámica: solo los códigos de vía que realmente existen en tus datos
+        codigos_presentes = sorted(gdf["Clase_Ruta"].dropna().astype(int).unique())
+        paleta_vial = {}
+        for codigo in codigos_presentes:
+            estilo = ESTILOS_TIPO_TRANSPORTE.get(codigo, ESTILO_VIAL_DEFAULT)
+            paleta_vial[f"Clase {codigo}"] = estilo["color"]
+        leyendas_html.append(leyenda_categorica_html("Red vial (por clase)", paleta_vial, "🛣️", f"{offset_top}px", "10px"))
+        offset_top += 40 + 20 * len(paleta_vial)
 
     # ── Magnitud / perímetro de incendios ─────────────────────
     elif "magnitud" in nombre_low or "incen" in nombre_low or "perimetro" in nombre_low:
@@ -367,6 +378,10 @@ for nombre in capas_activas:
                 aliases=["Incendio:", "Comuna:", "Causa:", "Superficie (ha):"]
             )
         ).add_to(m)
+        leyendas_html.append(
+            leyenda_categorica_html("Incendios (perímetro)", {"Área quemada": "#FF0000"}, "🔥", f"{offset_top}px", "10px")
+        )
+        offset_top += 60
 
     # ── Resto ────────────────────────────────────────────────
     else:
