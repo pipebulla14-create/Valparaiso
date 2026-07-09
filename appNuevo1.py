@@ -172,3 +172,68 @@ if show_snaspe and (DATA / "AreasSnaspe.shp").exists():
 # ─────────────────────────────────────────────────────────────
 folium.LayerControl(collapsed=False).add_to(m)
 st_folium(m, width=1200, height=650)
+# ─────────────────────────────────────────────────────────────
+# DASHBOARD: ESTADÍSTICAS Y TABLAS (Funcionalidades Avanzadas)
+# ─────────────────────────────────────────────────────────────
+st.markdown("---")
+st.header("📊 Análisis Territorial Detallado")
+
+# Dividir la pantalla en dos columnas para mejor estética
+col_tabla, col_grafico = st.columns(2)
+
+# 1. TABLA INTERACTIVA: Áreas Pobladas
+if show_pobladas and 'gdf_pob' in locals():
+    with col_tabla:
+        st.subheader("🏙️ Registro de Áreas Pobladas")
+        st.write("Explora los atributos de los polígonos urbanos:")
+        
+        # Filtramos la columna 'geometry' porque no se lee bien en tablas
+        cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
+        
+        # st.dataframe crea una tabla interactiva (ordenable y con scroll)
+        st.dataframe(gdf_pob[cols_mostrar], height=400, use_container_width=True)
+
+# 2. GRÁFICO ESTADÍSTICO: Áreas Protegidas (SNASPE)
+if show_snaspe and 'gdf_snaspe' in locals():
+    with col_grafico:
+        st.subheader("🌲 Superficie de Áreas Protegidas (ha)")
+        
+        # Calcular el área en hectáreas (reproyectando a UTM 19S para medir en metros)
+        gdf_snaspe_utm = gdf_snaspe.to_crs(32719)
+        gdf_snaspe['Area_ha'] = gdf_snaspe_utm.geometry.area / 10000
+        
+        # Buscamos la columna que tenga los nombres (o usamos el índice por defecto)
+        cols_texto = gdf_snaspe.select_dtypes(include=['object']).columns
+        eje_x = gdf_snaspe[cols_texto[0]].astype(str) if len(cols_texto) > 0 else gdf_snaspe.index.astype(str)
+        
+        # Crear gráfico con Matplotlib
+        fig, ax = plt.subplots(figsize=(10, 7))
+        
+        # Configuramos tamaños de fuente grandes para legibilidad óptica
+        plt.rcParams.update({'font.size': 24})
+        
+        barras = ax.bar(eje_x, gdf_snaspe['Area_ha'], color="#2E7D32", edgecolor="black")
+        
+        ax.set_ylabel("Hectáreas (ha)", fontsize=24)
+        ax.set_xlabel("Unidad SNASPE", fontsize=24)
+        plt.xticks(rotation=45, ha='right', fontsize=24)
+        plt.yticks(fontsize=24)
+        
+        # Identificar el polígono más grande para destacarlo con una flecha
+        max_idx = gdf_snaspe['Area_ha'].idxmax()
+        max_val = gdf_snaspe['Area_ha'].max()
+        
+        ax.annotate(
+            'Mayor extensión', 
+            xy=(max_idx, max_val), 
+            xytext=(max_idx, max_val * 1.15),
+            arrowprops=dict(facecolor='black', shrink=0.05, width=5, headwidth=15),
+            fontsize=24, 
+            ha='center'
+        )
+        
+        # Ajustar los márgenes para que no se corten los textos
+        plt.tight_layout()
+        
+        # Renderizar en la app
+        st.pyplot(fig)
