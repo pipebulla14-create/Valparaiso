@@ -269,24 +269,38 @@ try:
             st.metric("🔥 Superficie Total Quemada", f"{ha_quemadas:,.1f} ha")
             
     with col_m3:
-        # 9.4 CÁLCULO DE ÁREA POBLADA QUEMADA (Optimizado)
-        if show_pobladas and show_severidad and 'gdf_pob' in locals():
-            with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
-                # Reproyectamos poblados al CRS del raster para la máscara
-                gdf_pob_proj = gdf_pob.to_crs(src.crs)
+        # 9.4 CÁLCULO DE ÁREA POBLADA QUEMADA (Con diagnóstico)
+    if show_pobladas and show_severidad and 'gdf_pob' in locals():
+        with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
+            # Reproyectamos poblados al CRS del raster
+            gdf_pob_proj = gdf_pob.to_crs(src.crs)
+            
+            # Verificamos si los polígonos intersectan realmente con el raster
+            if not gdf_pob_proj.intersects(gpd.GeoSeries([gpd.box(*src.bounds)], crs=src.crs)).any():
+                st.warning("⚠️ El shapefile de Áreas Pobladas no intersecta con el raster.")
+            else:
                 geoms = gdf_pob_proj.geometry.values
-                
-                # Recortamos el raster solo a la zona poblada
                 from rasterio.mask import mask
-                out_image, out_transform = mask(src, geoms, crop=True, nodata=0)
                 
-                # Contamos píxeles quemados (valores > 0 en el recorte)
+                # Recortamos el raster
+                out_image, _ = mask(src, geoms, crop=True, nodata=0)
+                
+                # DIAGNÓSTICO: Ver qué valores hay en el raster recortado
+                valores_unicos = np.unique(out_image)
+                st.write(f"Valores detectados en la máscara: {valores_unicos}")
+                
+                # Contamos píxeles quemados (si tus valores son 1, 2, 3 o > 0.10)
                 area_pixel_ha = abs(src.res[0] * src.res[1]) / 10000
-                ha_urbana_quemada = np.sum(out_image[0] > 0) * area_pixel_ha
+                
+                # Ajuste según si tu raster usa enteros (1,2,3) o decimales
+                if max(valores_unicos) > 5:
+                    # Si usa valores altos (ej. 100-500)
+                    ha_urbana_quemada = np.sum(out_image[0] >= 100) * area_pixel_ha
+                else:
+                    # Si usa valores decimales (0.1, 0.2, etc)
+                    ha_urbana_quemada = np.sum(out_image[0] > 0.1) * area_pixel_ha
+                    
                 st.metric("🏘️ Área Poblada Quemada", f"{ha_urbana_quemada:,.1f} ha")
-
-    st.markdown("---")
-    col_tabla, col_grafico = st.columns(2)
 
     # 9.2 TABLA DE ATRIBUTOS
     if show_pobladas and 'gdf_pob' in locals():
