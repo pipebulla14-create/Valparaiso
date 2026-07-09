@@ -19,14 +19,12 @@ st.set_page_config(page_title="GeoVisualizador Valparaíso", layout="wide")
 st.title("🔥 GeoVisualizador de Severidad de Incendios - Valparaíso 2024")
 st.write("Análisis territorial de daños utilizando imágenes satelitales y datos oficiales.")
 
-# Directorio de datos espaciales
 DATA = Path("data")
 
 # ─────────────────────────────────────────────────────────────
 # 2. LEYENDAS INTERNAS DEL MAPA (HTML)
 # ─────────────────────────────────────────────────────────────
 def generar_leyenda_severidad_html():
-    """Genera un cuadro de leyenda flotante con diseño moderno para el mapa interactivo."""
     return """
     <div style="
         position: fixed; 
@@ -65,10 +63,9 @@ def generar_leyenda_severidad_html():
     """
 
 # ─────────────────────────────────────────────────────────────
-# 3. FUNCIONES DE PROCESAMIENTO RASTER
+# 3. FUNCIONES DE PROCESAMIENTO RASTER Y CÁLCULO
 # ─────────────────────────────────────────────────────────────
 def reproyectar_raster(src):
-    """Reproyecta un raster a WGS84 (EPSG:4326) para lectura en Folium."""
     if src.crs and src.crs.to_epsg() != 4326:
         transform, width, height = calculate_default_transform(
             src.crs, "EPSG:4326", src.width, src.height, *src.bounds
@@ -87,7 +84,6 @@ def reproyectar_raster(src):
     return data[0], bounds_wgs84
 
 def procesar_raster_color(ruta, tipo):
-    """Asigna colores cartográficos a los valores del raster y lo convierte a imagen B64."""
     with rasterio.open(ruta) as src:
         banda, bounds_wgs84 = reproyectar_raster(src)
         rgba = np.zeros((banda.shape[0], banda.shape[1], 4), dtype=np.uint8)
@@ -133,19 +129,16 @@ def procesar_raster_color(ruta, tipo):
         return img_b64, bounds
 
 def calcular_area_quemada(ruta):
-    """Calcula las hectáreas totales quemadas leyendo los píxeles del raster."""
     with rasterio.open(ruta) as src:
         banda = src.read(1)
         nodata = src.nodata if src.nodata is not None else 0
         valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
         
-        # Identificamos todos los píxeles que superen el umbral mínimo de quemado (baja severidad o más)
         if np.any((banda == 1) | (banda == 2) | (banda == 3)):
             quemado = ((banda == 1) | (banda == 2) | (banda == 3)) & valido
         else:
             quemado = (banda >= 0.10) & valido
             
-        # Si el raster está en grados, aproximamos resolución a 30x30m. Si está en metros, usamos su resolución real.
         if src.crs and not src.crs.is_projected:
             area_pixel_m2 = 30 * 30
         else:
@@ -176,6 +169,13 @@ show_severidad = st.sidebar.checkbox("Severidad dNBR (Solo Quemado)", value=True
 m = folium.Map(location=[-33.08, -71.48], zoom_start=11, tiles="OpenStreetMap")
 folium.TileLayer("CartoDB positron", name="Mapa claro").add_to(m)
 
+# Nuevo Mapa Base: Imagen Satelital Esri
+folium.TileLayer(
+    tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attr="Esri",
+    name="🛰️ Satélite (Esri)"
+).add_to(m)
+
 capas_raster_activas = []
 
 # ─────────────────────────────────────────────────────────────
@@ -187,7 +187,6 @@ if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
         capa = folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img}", bounds=bnds, name="🔥 Severidad dNBR")
         capa.add_to(m)
         capas_raster_activas.append(capa)
-        # Añadir leyenda moderna al mapa interactivo
         m.get_root().html.add_child(folium.Element(generar_leyenda_severidad_html()))
 
 if show_ndvi and (DATA / "VALPO_perdida_NDVI_pct.tif").exists():
@@ -210,7 +209,6 @@ if show_dem and (DATA / "dem30.tif").exists():
         capa = folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img}", bounds=bnds, name="⛰️ DEM 30m")
         capa.add_to(m)
 
-# Activar modo comparador si exactamente 2 rasters están encendidos
 if len(capas_raster_activas) == 2:
     plugins.SideBySideLayers(layer_left=capas_raster_activas[0], layer_right=capas_raster_activas[1]).add_to(m)
     st.info("💡 **Modo Comparador activado:** Desliza la barra central para comparar las capas raster.")
@@ -255,7 +253,7 @@ st.markdown("---")
 st.header("📊 Análisis Territorial Detallado")
 
 try:
-    # 9.1 MÉTRICAS GLOBALES: Red Vial y Área Quemada
+    # 9.1 MÉTRICAS GLOBALES
     col_m1, col_m2 = st.columns(2)
     
     with col_m1:
@@ -273,14 +271,24 @@ try:
             
     st.markdown("---")
 
-    # 9.2 TABLAS Y GRÁFICOS
     col_tabla, col_grafico = st.columns(2)
 
+    # 9.2 TABLA DE ATRIBUTOS (CON NOMBRES LIMPIOS Y WARNING CORREGIDO)
     if show_pobladas and 'gdf_pob' in locals():
         with col_tabla:
             st.subheader("🏙️ Registro de Áreas Pobladas")
             cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
-            st.dataframe(gdf_pob[cols_mostrar], height=400, use_container_width=True)
+            df_limpio = gdf_pob[cols_mostrar].copy()
+            
+            # Renombramos las columnas crudas del Shapefile por nombres limpios para la presentación
+            df_limpio = df_limpio.rename(columns={
+                "objectid": "ID",
+                "st_area_sh": "Área (m²)",
+                "st_length_": "Perímetro (m)",
+                "comuna": "Comuna"
+            })
+            # width="stretch" reemplaza al antiguo use_container_width=True para eliminar la advertencia
+            st.dataframe(df_limpio, height=400, width="stretch")
 
     if show_snaspe and 'gdf_snaspe' in locals():
         with col_grafico:
