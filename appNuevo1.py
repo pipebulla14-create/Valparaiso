@@ -274,56 +274,42 @@ try:
 
     col_tabla, col_grafico = st.columns(2)
 
-    # 9.2 TABLA DE ATRIBUTOS (CON NOMBRES LIMPIOS Y WARNING CORREGIDO)
+    # 9.2 TABLA DE ATRIBUTOS (Áreas Pobladas)
     if show_pobladas and 'gdf_pob' in locals():
         with col_tabla:
             st.subheader("🏙️ Registro de Áreas Pobladas")
             cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
             df_limpio = gdf_pob[cols_mostrar].copy()
             
-            # Renombramos las columnas crudas del Shapefile por nombres limpios para la presentación
+            # Renombramos columnas para presentación
             df_limpio = df_limpio.rename(columns={
                 "objectid": "ID",
                 "st_area_sh": "Área (m²)",
                 "st_length_": "Perímetro (m)",
                 "comuna": "Comuna"
             })
-            # width="stretch" reemplaza al antiguo use_container_width=True para eliminar la advertencia
-            st.dataframe(df_limpio, height=400, width="stretch")
+            # Convertimos área a hectáreas para mayor legibilidad en la tabla
+            if "Área (m²)" in df_limpio.columns:
+                df_limpio["Área (ha)"] = df_limpio["Área (m²)"] / 10000
+            
+            st.dataframe(df_limpio, height=400, use_container_width=True)
 
+    # 9.3 MÉTRICAS: Superficie de Áreas Protegidas (Sin gráficos)
     if show_snaspe and 'gdf_snaspe' in locals():
         with col_grafico:
-            st.subheader("🌲 Superficie de Áreas Protegidas")
+            st.subheader("🌲 Superficie de Áreas Protegidas (ha)")
             if gdf_snaspe.crs is None:
                 gdf_snaspe = gdf_snaspe.set_crs(4326)
                 
             gdf_snaspe_utm = gdf_snaspe.to_crs(32719)
             gdf_snaspe['Area_ha'] = gdf_snaspe_utm.geometry.area / 10000
             
-            cols_texto = gdf_snaspe.select_dtypes(include=['object']).columns
-            eje_x = gdf_snaspe[cols_texto[0]].astype(str) if len(cols_texto) > 0 else gdf_snaspe.index.astype(str)
-            
-            fig, ax = plt.subplots(figsize=(10, 7))
-            plt.rcParams.update({'font.size': 24})
-            
-            ax.bar(eje_x, gdf_snaspe['Area_ha'], color="#2E7D32", edgecolor="black")
-            ax.set_ylabel("Hectáreas (ha)", fontsize=24)
-            plt.xticks(rotation=45, ha='right', fontsize=24)
-            
-            if not gdf_snaspe.empty:
-                max_idx = gdf_snaspe['Area_ha'].idxmax()
-                max_val = gdf_snaspe['Area_ha'].max()
-                ax.annotate(
-                    'Mayor extensión', 
-                    xy=(max_idx, max_val), 
-                    xytext=(max_idx, max_val * 1.15),
-                    arrowprops=dict(facecolor='black', shrink=0.05, width=5, headwidth=15),
-                    fontsize=24, 
-                    ha='center'
-                )
-            
-            plt.tight_layout()
-            st.pyplot(fig)
+            # Mostramos las áreas protegidas como métricas individuales
+            # Esto evita errores de renderizado de gráficos y es más claro para el usuario
+            for _, row in gdf_snaspe.iterrows():
+                nombre = row.get('nombre', 'Área Protegida')
+                area = row['Area_ha']
+                st.metric(label=str(nombre), value=f"{area:,.1f} ha")
 
 except Exception as e:
     st.error(f"Ocurrió un error al cargar el dashboard de estadísticas: {e}")
