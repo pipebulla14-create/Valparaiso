@@ -318,31 +318,53 @@ try:
                 nodata = src.nodata if src.nodata is not None else 0
                 valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
                 
+                # CORRECCIÓN VITAL: Diferenciar si el raster tiene valores enteros (1, 2, 3) o decimales
                 if np.any((banda == 1) | (banda == 2) | (banda == 3)):
-                    baja = np.sum((banda == 1) & valido)
-                    mod = np.sum((banda == 2) & valido)
-                    alta = np.sum((banda == 3) & valido)
+                    baja = float(np.sum((banda == 1) & valido))
+                    mod = float(np.sum((banda == 2) & valido))
+                    alta = float(np.sum((banda == 3) & valido))
                 else:
-                    baja = np.sum((banda >= 0.10) & (banda < 0.27) & valido)
-                    mod = np.sum((banda >= 0.27) & (banda < 0.44) & valido)
-                    alta = np.sum((banda >= 0.44) & valido)
+                    baja = float(np.sum((banda >= 0.10) & (banda < 0.27) & valido))
+                    mod = float(np.sum((banda >= 0.27) & (banda < 0.44) & valido))
+                    alta = float(np.sum((banda >= 0.44) & valido))
                 
-                # Configuramos un tamaño de fuente de 24 para legibilidad óptica, como solicitaste previamente
+                # FILTRO DINÁMICO: Solo agrega al gráfico las categorías que tienen área real
+                datos = []
+                etiquetas = []
+                colores = []
+                
+                if baja > 0:
+                    datos.append(baja)
+                    etiquetas.append('Baja')
+                    colores.append('#FFFF00')
+                if mod > 0:
+                    datos.append(mod)
+                    etiquetas.append('Moderada')
+                    colores.append('#FF9900')
+                if alta > 0:
+                    datos.append(alta)
+                    etiquetas.append('Alta')
+                    colores.append('#FF0000')
+                
+                # Configuración óptica para presentación (fuente 24)
                 plt.rcParams.update({'font.size': 24})
                 fig, ax = plt.subplots(figsize=(8, 6))
-                tamaños = [baja, mod, alta]
-                etiquetas = ['Baja', 'Moderada', 'Alta']
-                colores = ['#FFFF00', '#FF9900', '#FF0000']
                 
-                if sum(tamaños) > 0:
-                    ax.pie(tamaños, labels=etiquetas, colors=colores, autopct='%1.1f%%', 
-                           startangle=90, textprops={'fontsize': 24},
-                           wedgeprops={"edgecolor":"black", 'linewidth': 1})
+                # Hacemos el fondo de la figura transparente
+                fig.patch.set_alpha(0.0)
+                ax.set_facecolor((0, 0, 0, 0))
+                
+                if len(datos) > 0:
+                    ax.pie(datos, labels=etiquetas, colors=colores, autopct='%1.1f%%', 
+                           startangle=90, textprops={'fontsize': 24, 'color': 'black', 'weight': 'bold'},
+                           wedgeprops={"edgecolor":"black", 'linewidth': 2})
                     ax.axis('equal') 
                     plt.tight_layout()
-                    st.pyplot(fig)
+                    
+                    # El theme=None fuerza a Streamlit a usar los colores puros y evitar el tono "lavado"
+                    st.pyplot(fig, theme=None)
                 else:
-                    st.info("No se detectaron áreas quemadas en la vista actual.")
+                    st.info("No se detectaron áreas quemadas válidas en el análisis.")
 
 except Exception as e:
     st.error(f"Ocurrió un error al cargar el dashboard de estadísticas: {e}")
