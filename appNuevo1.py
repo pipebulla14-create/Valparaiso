@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import rasterio
 from rasterio.warp import calculate_default_transform, reproject, Resampling
+from shapely.geometry import box
 import io, base64
 from PIL import Image
 import matplotlib
@@ -220,7 +221,8 @@ if show_pobladas and (DATA / "AreasPobladas.shp").exists():
     gdf_pob = gpd.read_file(DATA / "AreasPobladas.shp").to_crs(4326)
     folium.GeoJson(
         gdf_pob, name="🏙️ Áreas Pobladas",
-        style_function=lambda x: {"fillColor": "#B22222", "color": "#7A1515", "weight": 1.5, "fillOpacity": 0.45},
+        # Cambiamos fillColor a azul acero (#2980B9)
+        style_function=lambda x: {"fillColor": "#2980B9", "color": "#1C5980", "weight": 1.5, "fillOpacity": 0.5},
         tooltip=folium.GeoJsonTooltip(fields=list(gdf_pob.columns[:2])) if len(gdf_pob.columns) > 1 else "Área Poblada"
     ).add_to(m)
 
@@ -241,88 +243,59 @@ if show_red_vial and (DATA / "redVial.shp").exists():
     ).add_to(m)
 
 # ─────────────────────────────────────────────────────────────
-# 8. VISUALIZACIÓN DEL MAPA EN LA APP
+# 8. VISUALIZACIÓN DEL MAPA
 # ─────────────────────────────────────────────────────────────
 folium.LayerControl(collapsed=False).add_to(m)
 st_folium(m, width=1200, height=650)
 
 # ─────────────────────────────────────────────────────────────
-# 9. DASHBOARD: ESTADÍSTICAS Y GRÁFICOS INTERACTIVOS
+# 9. DASHBOARD
 # ─────────────────────────────────────────────────────────────
 st.markdown("---")
 st.header("📊 Análisis Territorial Detallado")
 
 try:
-    # 9.1 MÉTRICAS GLOBALES
-    col_m1, col_m2 = st.columns(2)
+    col_m1, col_m2, col_m3 = st.columns(3)
     
     with col_m1:
         if show_red_vial and 'gdf_vial' in locals():
-            if gdf_vial.crs is None:
-                gdf_vial = gdf_vial.set_crs(4326)
-            gdf_vial_utm = gdf_vial.to_crs(32719)
-            longitud_km = gdf_vial_utm.geometry.length.sum() / 1000
-            st.metric("🛣️ Red Vial Afectada / Analizada", f"{longitud_km:,.1f} km")
+            if gdf_vial.crs is None: gdf_vial = gdf_vial.set_crs(4326)
+            st.metric("🛣️ Red Vial Total", f"{gdf_vial.to_crs(32719).geometry.length.sum()/1000:,.1f} km")
             
     with col_m2:
         if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
-            ha_quemadas = calcular_area_quemada(DATA / "VALPO_severidad_dNBR_solo_quemado.tif")
-            st.metric("🔥 Superficie Total Quemada", f"{ha_quemadas:,.1f} hectáreas")
+            st.metric("🔥 Superficie Total Quemada", f"{calcular_area_quemada(DATA / 'VALPO_severidad_dNBR_solo_quemado.tif'):,.1f} ha")
             
-    st.markdown("---")
+    with col_m3:
+        if show_pobladas and show_severidad and 'gdf_pob' in locals():
+            with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
+                gdf_pob_proj = gdf_pob.to_crs(src.crs)
+                if gdf_pob_proj.intersects(box(*src.bounds)).any():
+                    out_image, _ = mask(src, gdf_pob_proj.geometry.values, crop=True, nodata=0)
+                    ha_urbana_quemada = np.sum(out_image[0] > 0.1) * (abs(src.res[0]*src.res[1])/10000)
+                    st.metric("🏘️ Área Poblada Quemada", f"{ha_urbana_quemada:,.1f} ha")
+                else:
+                    st.metric("🏘️ Área Poblada Quemada", "N/A")
 
     col_tabla, col_grafico = st.columns(2)
+    
+    with col_tabla:
+        st.subheader("🏙️ Registro de Áreas Pobladas")
+        if 'gdf_pob' in locals():
+            df_limpio = gdf_pob.drop(columns='geometry').rename(columns={"objectid": "ID", "st_area_sh": "Área (m²)"})
+            st.dataframe(df_limpio, use_container_width=True)
 
-    # 9.2 TABLA DE ATRIBUTOS (CON NOMBRES LIMPIOS Y WARNING CORREGIDO)
-    if show_pobladas and 'gdf_pob' in locals():
-        with col_tabla:
-            st.subheader("🏙️ Registro de Áreas Pobladas")
-            cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
-            df_limpio = gdf_pob[cols_mostrar].copy()
-            
-            # Renombramos las columnas crudas del Shapefile por nombres limpios para la presentación
-            df_limpio = df_limpio.rename(columns={
-                "objectid": "ID",
-                "st_area_sh": "Área (m²)",
-                "st_length_": "Perímetro (m)",
-                "comuna": "Comuna"
-            })
-            # width="stretch" reemplaza al antiguo use_container_width=True para eliminar la advertencia
-            st.dataframe(df_limpio, height=400, width="stretch")
-
-    if show_snaspe and 'gdf_snaspe' in locals():
-        with col_grafico:
-            st.subheader("🌲 Superficie de Áreas Protegidas")
-            if gdf_snaspe.crs is None:
-                gdf_snaspe = gdf_snaspe.set_crs(4326)
-                
-            gdf_snaspe_utm = gdf_snaspe.to_crs(32719)
-            gdf_snaspe['Area_ha'] = gdf_snaspe_utm.geometry.area / 10000
-            
-            cols_texto = gdf_snaspe.select_dtypes(include=['object']).columns
-            eje_x = gdf_snaspe[cols_texto[0]].astype(str) if len(cols_texto) > 0 else gdf_snaspe.index.astype(str)
-            
-            fig, ax = plt.subplots(figsize=(10, 7))
-            plt.rcParams.update({'font.size': 24})
-            
-            ax.bar(eje_x, gdf_snaspe['Area_ha'], color="#2E7D32", edgecolor="black")
-            ax.set_ylabel("Hectáreas (ha)", fontsize=24)
-            plt.xticks(rotation=45, ha='right', fontsize=24)
-            
-            if not gdf_snaspe.empty:
-                max_idx = gdf_snaspe['Area_ha'].idxmax()
-                max_val = gdf_snaspe['Area_ha'].max()
-                ax.annotate(
-                    'Mayor extensión', 
-                    xy=(max_idx, max_val), 
-                    xytext=(max_idx, max_val * 1.15),
-                    arrowprops=dict(facecolor='black', shrink=0.05, width=5, headwidth=15),
-                    fontsize=24, 
-                    ha='center'
-                )
-            
-            plt.tight_layout()
-            st.pyplot(fig)
+    with col_grafico:
+        st.subheader("🔥 Superficie por Nivel de Daño")
+        if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
+            with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
+                banda = src.read(1); valido = (banda != 0) & (~np.isnan(banda))
+                h = abs(src.res[0]*src.res[1])/10000
+                vals = [np.sum((banda >= 0.1) & (banda < 0.27) & valido)*h, np.sum((banda >= 0.27) & (banda < 0.44) & valido)*h, np.sum((banda >= 0.44) & valido)*h]
+                fig, ax = plt.subplots(figsize=(8,4))
+                ax.bar(['Baja', 'Moderada', 'Alta'], vals, color=['#FFFF00', '#FF9900', '#FF0000'], edgecolor='black')
+                ax.set_ylabel("Hectáreas (ha)")
+                st.pyplot(fig)
 
 except Exception as e:
-    st.error(f"Ocurrió un error al cargar el dashboard de estadísticas: {e}")
+    st.error(f"Error en dashboard: {e}")
