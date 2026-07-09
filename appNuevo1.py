@@ -26,35 +26,40 @@ DATA = Path("data")
 # 2. LEYENDAS INTERNAS DEL MAPA (HTML)
 # ─────────────────────────────────────────────────────────────
 def generar_leyenda_severidad_html():
-    """Genera un cuadro de leyenda flotante para el mapa interactivo."""
+    """Genera un cuadro de leyenda flotante con diseño moderno para el mapa interactivo."""
     return """
     <div style="
         position: fixed; 
         bottom: 50px; 
         left: 20px; 
-        width: 220px;
+        width: 250px;
         height: auto; 
         z-index:9999; 
-        background-color: rgba(255, 255, 255, 0.92);
-        box-shadow: 0 0 15px rgba(0,0,0,0.2);
-        padding: 12px; 
-        font-family: Arial, sans-serif;
-        font-size: 12px; 
-        border-radius: 8px;
-        border: 1px solid #bbb;">
-        <b style="font-size: 13px; color: #222;">🔥 Severidad dNBR</b><br>
-        <hr style="margin: 6px 0; border-color: #ccc;">
-        <div style="display:flex; align-items:center; margin-bottom: 4px;">
-            <div style="background-color: rgb(255,255,0); width: 18px; height: 18px; margin-right: 8px; border: 1px solid #555;"></div>
-            <span>Baja (0.10 - 0.27)</span>
+        background-color: rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(6px);
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        padding: 15px; 
+        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        font-size: 13px; 
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.4);">
+        
+        <div style="text-align: center; margin-bottom: 10px;">
+            <b style="font-size: 15px; color: #222;">🔥 Nivel de Daño (dNBR)</b>
         </div>
-        <div style="display:flex; align-items:center; margin-bottom: 4px;">
-            <div style="background-color: rgb(255,153,0); width: 18px; height: 18px; margin-right: 8px; border: 1px solid #555;"></div>
-            <span>Moderada (0.27 - 0.44)</span>
+        <hr style="margin: 0 0 12px 0; border: 0; border-top: 1px solid #ddd;">
+        
+        <div style="display:flex; align-items:center; margin-bottom: 10px;">
+            <div style="background-color: rgba(255,255,0,0.9); width: 22px; height: 22px; border-radius: 5px; margin-right: 12px; border: 1px solid #999; box-shadow: 1px 1px 3px rgba(0,0,0,0.2);"></div>
+            <span style="color: #333; font-weight: 500;">Baja Severidad <br><small style="color: #666;">(0.10 - 0.27)</small></span>
+        </div>
+        <div style="display:flex; align-items:center; margin-bottom: 10px;">
+            <div style="background-color: rgba(255,153,0,0.9); width: 22px; height: 22px; border-radius: 5px; margin-right: 12px; border: 1px solid #999; box-shadow: 1px 1px 3px rgba(0,0,0,0.2);"></div>
+            <span style="color: #333; font-weight: 500;">Severidad Moderada <br><small style="color: #666;">(0.27 - 0.44)</small></span>
         </div>
         <div style="display:flex; align-items:center;">
-            <div style="background-color: rgb(255,0,0); width: 18px; height: 18px; margin-right: 8px; border: 1px solid #555;"></div>
-            <span>Alta (≥ 0.44)</span>
+            <div style="background-color: rgba(255,0,0,0.9); width: 22px; height: 22px; border-radius: 5px; margin-right: 12px; border: 1px solid #999; box-shadow: 1px 1px 3px rgba(0,0,0,0.2);"></div>
+            <span style="color: #333; font-weight: 500;">Alta Severidad <br><small style="color: #666;">(≥ 0.44)</small></span>
         </div>
     </div>
     """
@@ -91,15 +96,14 @@ def procesar_raster_color(ruta, tipo):
         valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
 
         if tipo == "severidad":
-            # Soporte para rasters clasificados por enteros (1,2,3) o floats continuos
             if np.any((banda == 1) | (banda == 2) | (banda == 3)):
                 rgba[(banda == 1) & valido] = [255, 255, 0, 200]
                 rgba[(banda == 2) & valido] = [255, 153, 0, 200]
                 rgba[(banda == 3) & valido] = [255, 0, 0, 200]
             else:
-                rgba[(banda >= 0.10) & (banda < 0.27) & valido] = [255, 255, 0, 200]   # Baja
-                rgba[(banda >= 0.27) & (banda < 0.44) & valido] = [255, 153, 0, 200]  # Moderada
-                rgba[(banda >= 0.44) & valido] = [255, 0, 0, 200]                     # Alta
+                rgba[(banda >= 0.10) & (banda < 0.27) & valido] = [255, 255, 0, 200]
+                rgba[(banda >= 0.27) & (banda < 0.44) & valido] = [255, 153, 0, 200]
+                rgba[(banda >= 0.44) & valido] = [255, 0, 0, 200]
             
         elif tipo == "ndvi":
             vmin, vmax = np.percentile(banda[valido], (2, 98)) if np.any(valido) else (0, 100)
@@ -127,6 +131,28 @@ def procesar_raster_color(ruta, tipo):
         img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
         bounds = [[bounds_wgs84[1], bounds_wgs84[0]], [bounds_wgs84[3], bounds_wgs84[2]]]
         return img_b64, bounds
+
+def calcular_area_quemada(ruta):
+    """Calcula las hectáreas totales quemadas leyendo los píxeles del raster."""
+    with rasterio.open(ruta) as src:
+        banda = src.read(1)
+        nodata = src.nodata if src.nodata is not None else 0
+        valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
+        
+        # Identificamos todos los píxeles que superen el umbral mínimo de quemado (baja severidad o más)
+        if np.any((banda == 1) | (banda == 2) | (banda == 3)):
+            quemado = ((banda == 1) | (banda == 2) | (banda == 3)) & valido
+        else:
+            quemado = (banda >= 0.10) & valido
+            
+        # Si el raster está en grados, aproximamos resolución a 30x30m. Si está en metros, usamos su resolución real.
+        if src.crs and not src.crs.is_projected:
+            area_pixel_m2 = 30 * 30
+        else:
+            area_pixel_m2 = abs(src.res[0] * src.res[1])
+            
+        hectareas_totales = (np.sum(quemado) * area_pixel_m2) / 10000
+        return hectareas_totales
 
 # ─────────────────────────────────────────────────────────────
 # 4. SIDEBAR: PANEL DE CONTROL DE CAPAS
@@ -161,7 +187,7 @@ if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
         capa = folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img}", bounds=bnds, name="🔥 Severidad dNBR")
         capa.add_to(m)
         capas_raster_activas.append(capa)
-        # Añadir leyenda al mapa interactivo
+        # Añadir leyenda moderna al mapa interactivo
         m.get_root().html.add_child(folium.Element(generar_leyenda_severidad_html()))
 
 if show_ndvi and (DATA / "VALPO_perdida_NDVI_pct.tif").exists():
@@ -229,26 +255,33 @@ st.markdown("---")
 st.header("📊 Análisis Territorial Detallado")
 
 try:
-    # 9.1 MÉTRICA GLOBAL: Longitud de Red Vial
-    if show_red_vial and 'gdf_vial' in locals():
-        if gdf_vial.crs is None:
-            gdf_vial = gdf_vial.set_crs(4326)
-        # Reproyección a UTM 19S (EPSG:32719) para medición precisa en metros
-        gdf_vial_utm = gdf_vial.to_crs(32719)
-        longitud_km = gdf_vial_utm.geometry.length.sum() / 1000
-        st.metric("🛣️ Longitud Total de la Red Vial Afectada / Analizada", f"{longitud_km:,.1f} km")
-        st.markdown("---")
+    # 9.1 MÉTRICAS GLOBALES: Red Vial y Área Quemada
+    col_m1, col_m2 = st.columns(2)
+    
+    with col_m1:
+        if show_red_vial and 'gdf_vial' in locals():
+            if gdf_vial.crs is None:
+                gdf_vial = gdf_vial.set_crs(4326)
+            gdf_vial_utm = gdf_vial.to_crs(32719)
+            longitud_km = gdf_vial_utm.geometry.length.sum() / 1000
+            st.metric("🛣️ Red Vial Afectada / Analizada", f"{longitud_km:,.1f} km")
+            
+    with col_m2:
+        if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
+            ha_quemadas = calcular_area_quemada(DATA / "VALPO_severidad_dNBR_solo_quemado.tif")
+            st.metric("🔥 Superficie Total Quemada", f"{ha_quemadas:,.1f} hectáreas")
+            
+    st.markdown("---")
 
+    # 9.2 TABLAS Y GRÁFICOS
     col_tabla, col_grafico = st.columns(2)
 
-    # 9.2 TABLA DE ATRIBUTOS: Áreas Pobladas
     if show_pobladas and 'gdf_pob' in locals():
         with col_tabla:
             st.subheader("🏙️ Registro de Áreas Pobladas")
             cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
             st.dataframe(gdf_pob[cols_mostrar], height=400, use_container_width=True)
 
-    # 9.3 GRÁFICO DE BARRAS: Áreas Protegidas SNASPE
     if show_snaspe and 'gdf_snaspe' in locals():
         with col_grafico:
             st.subheader("🌲 Superficie de Áreas Protegidas")
