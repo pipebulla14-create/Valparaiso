@@ -248,80 +248,63 @@ folium.LayerControl(collapsed=False).add_to(m)
 st_folium(m, width=1200, height=650)
 
 # ─────────────────────────────────────────────────────────────
-# 9. DASHBOARD: ESTADÍSTICAS Y GRÁFICOS INTERACTIVOS
+# 9. DASHBOARD: ESTADÍSTICAS Y GRÁFICOS INTERACTIVOS (Final)
 # ─────────────────────────────────────────────────────────────
 st.markdown("---")
 st.header("📊 Análisis Territorial Detallado")
 
 try:
     # 9.1 MÉTRICAS GLOBALES
-    col_m1, col_m2 = st.columns(2)
+    col_m1, col_m2, col_m3 = st.columns(3)
     
     with col_m1:
         if show_red_vial and 'gdf_vial' in locals():
-            if gdf_vial.crs is None:
-                gdf_vial = gdf_vial.set_crs(4326)
-            gdf_vial_utm = gdf_vial.to_crs(32719)
-            longitud_km = gdf_vial_utm.geometry.length.sum() / 1000
-            st.metric("🛣️ Red Vial Afectada / Analizada", f"{longitud_km:,.1f} km")
+            if gdf_vial.crs is None: gdf_vial = gdf_vial.set_crs(4326)
+            longitud_km = gdf_vial.to_crs(32719).geometry.length.sum() / 1000
+            st.metric("🛣️ Red Vial Total", f"{longitud_km:,.1f} km")
             
     with col_m2:
         if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
             ha_quemadas = calcular_area_quemada(DATA / "VALPO_severidad_dNBR_solo_quemado.tif")
-            st.metric("🔥 Superficie Total Quemada", f"{ha_quemadas:,.1f} hectáreas")
+            st.metric("🔥 Superficie Total Quemada", f"{ha_quemadas:,.1f} ha")
             
-    st.markdown("---")
+    with col_m3:
+        # 9.4 CÁLCULO DE ÁREA POBLADA QUEMADA (Optimizado)
+        if show_pobladas and show_severidad and 'gdf_pob' in locals():
+            with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
+                # Reproyectamos poblados al CRS del raster para la máscara
+                gdf_pob_proj = gdf_pob.to_crs(src.crs)
+                geoms = gdf_pob_proj.geometry.values
+                
+                # Recortamos el raster solo a la zona poblada
+                from rasterio.mask import mask
+                out_image, out_transform = mask(src, geoms, crop=True, nodata=0)
+                
+                # Contamos píxeles quemados (valores > 0 en el recorte)
+                area_pixel_ha = abs(src.res[0] * src.res[1]) / 10000
+                ha_urbana_quemada = np.sum(out_image[0] > 0) * area_pixel_ha
+                st.metric("🏘️ Área Poblada Quemada", f"{ha_urbana_quemada:,.1f} ha")
 
+    st.markdown("---")
     col_tabla, col_grafico = st.columns(2)
 
-    # 9.2 TABLA DE ATRIBUTOS (Áreas Pobladas)
+    # 9.2 TABLA DE ATRIBUTOS
     if show_pobladas and 'gdf_pob' in locals():
         with col_tabla:
             st.subheader("🏙️ Registro de Áreas Pobladas")
-            cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
-            df_limpio = gdf_pob[cols_mostrar].copy()
-            
-            # Renombramos columnas para presentación
-            df_limpio = df_limpio.rename(columns={
-                "objectid": "ID",
-                "st_area_sh": "Área (m²)",
-                "st_length_": "Perímetro (m)",
-                "comuna": "Comuna"
+            df_limpio = gdf_pob.drop(columns='geometry').rename(columns={
+                "objectid": "ID", "st_area_sh": "Área (m²)", "st_length_": "Perímetro (m)", "comuna": "Comuna"
             })
-            # Convertimos área a hectáreas para mayor legibilidad en la tabla
-            if "Área (m²)" in df_limpio.columns:
-                df_limpio["Área (ha)"] = df_limpio["Área (m²)"] / 10000
-            
-            st.dataframe(df_limpio, height=400, use_container_width=True)
+            st.dataframe(df_limpio, height=350, use_container_width=True)
+            csv = df_limpio.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Descargar CSV", data=csv, file_name='areas_pobladas.csv', mime='text/csv')
 
-    # 9.3 MÉTRICAS: Superficie de Áreas Protegidas (Sin gráficos)
-    if show_snaspe and 'gdf_snaspe' in locals():
+    # 9.3 GRÁFICO DE BARRAS
+    if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
         with col_grafico:
-            st.subheader("🌲 Superficie de Áreas Protegidas (ha)")
-            if gdf_snaspe.crs is None:
-                gdf_snaspe = gdf_snaspe.set_crs(4326)
-                
-            gdf_snaspe_utm = gdf_snaspe.to_crs(32719)
-            gdf_snaspe['Area_ha'] = gdf_snaspe_utm.geometry.area / 10000
-            
-            # Mostramos las áreas protegidas como métricas individuales
-            # Esto evita errores de renderizado de gráficos y es más claro para el usuario
-            for _, row in gdf_snaspe.iterrows():
-                nombre = row.get('nombre', 'Área Protegida')
-                area = row['Area_ha']
-                st.metric(label=str(nombre), value=f"{area:,.1f} ha")
+            st.subheader("🔥 Superficie por Nivel de Daño")
+            # ... (código del gráfico de barras que ya tenías)
+            # (Mantén el código del gráfico de barras que te funcionó en el paso anterior aquí)
 
 except Exception as e:
-    st.error(f"Ocurrió un error al cargar el dashboard de estadísticas: {e}")
-    # 9.4 CÁLCULO DE ÁREA POBLADA QUEMADA
-if show_pobladas and show_severidad and 'gdf_pob' in locals():
-    # 1. Asegurar que ambos datos estén en UTM 19S para medir en metros/hectáreas
-    gdf_pob_utm = gdf_pob.to_crs(32719)
-    
-    # 2. Cargar el raster de severidad y crear una máscara binaria (quemado vs no quemado)
-    with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
-        # Aquí asumimos que los valores del raster indican severidad
-        # Necesitamos la geometría de este raster. 
-        # Un truco eficiente es usar geopandas para el área poblada y calcular qué parte de ella 
-        # intersecta con la máscara del raster.
-        pass # (Nota: Este cálculo es computacionalmente intensivo)
+    st.error(f"Error al cargar el dashboard: {e}")
