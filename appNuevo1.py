@@ -13,19 +13,57 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 # ─────────────────────────────────────────────────────────────
-# CONFIGURACIÓN GENERAL
+# 1. CONFIGURACIÓN GENERAL DE LA APLICACIÓN
 # ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="GeoVisualizador Valparaíso", layout="wide")
 st.title("🔥 GeoVisualizador de Severidad de Incendios - Valparaíso 2024")
 st.write("Análisis territorial de daños utilizando imágenes satelitales y datos oficiales.")
 
+# Directorio de datos espaciales
 DATA = Path("data")
 
 # ─────────────────────────────────────────────────────────────
-# FUNCIONES DE PROCESAMIENTO RASTER
+# 2. LEYENDAS INTERNAS DEL MAPA (HTML)
+# ─────────────────────────────────────────────────────────────
+def generar_leyenda_severidad_html():
+    """Genera un cuadro de leyenda flotante para el mapa interactivo."""
+    return """
+    <div style="
+        position: fixed; 
+        bottom: 50px; 
+        left: 20px; 
+        width: 220px;
+        height: auto; 
+        z-index:9999; 
+        background-color: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        padding: 12px; 
+        font-family: Arial, sans-serif;
+        font-size: 12px; 
+        border-radius: 8px;
+        border: 1px solid #bbb;">
+        <b style="font-size: 13px; color: #222;">🔥 Severidad dNBR</b><br>
+        <hr style="margin: 6px 0; border-color: #ccc;">
+        <div style="display:flex; align-items:center; margin-bottom: 4px;">
+            <div style="background-color: rgb(255,255,0); width: 18px; height: 18px; margin-right: 8px; border: 1px solid #555;"></div>
+            <span>Baja (0.10 - 0.27)</span>
+        </div>
+        <div style="display:flex; align-items:center; margin-bottom: 4px;">
+            <div style="background-color: rgb(255,153,0); width: 18px; height: 18px; margin-right: 8px; border: 1px solid #555;"></div>
+            <span>Moderada (0.27 - 0.44)</span>
+        </div>
+        <div style="display:flex; align-items:center;">
+            <div style="background-color: rgb(255,0,0); width: 18px; height: 18px; margin-right: 8px; border: 1px solid #555;"></div>
+            <span>Alta (≥ 0.44)</span>
+        </div>
+    </div>
+    """
+
+# ─────────────────────────────────────────────────────────────
+# 3. FUNCIONES DE PROCESAMIENTO RASTER
 # ─────────────────────────────────────────────────────────────
 def reproyectar_raster(src):
-    """Reproyecta un raster a WGS84 (EPSG:4326) para que Folium lo pueda leer."""
+    """Reproyecta un raster a WGS84 (EPSG:4326) para lectura en Folium."""
     if src.crs and src.crs.to_epsg() != 4326:
         transform, width, height = calculate_default_transform(
             src.crs, "EPSG:4326", src.width, src.height, *src.bounds
@@ -44,23 +82,26 @@ def reproyectar_raster(src):
     return data[0], bounds_wgs84
 
 def procesar_raster_color(ruta, tipo):
-    """Convierte el raster a una imagen PNG en base64 con colores según su temática."""
+    """Asigna colores cartográficos a los valores del raster y lo convierte a imagen B64."""
     with rasterio.open(ruta) as src:
         banda, bounds_wgs84 = reproyectar_raster(src)
         rgba = np.zeros((banda.shape[0], banda.shape[1], 4), dtype=np.uint8)
         
-        # Máscara para ignorar valores nulos o ceros absolutos fuera del área
         nodata = src.nodata if src.nodata is not None else 0
-        valido = (banda != nodata) & (~np.isnan(banda))
+        valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
 
         if tipo == "severidad":
-            # 1: Baja (Amarillo), 2: Moderada (Naranjo), 3: Alta (Rojo)
-            rgba[(banda == 1) & valido] = [255, 255, 0, 200]
-            rgba[(banda == 2) & valido] = [255, 153, 0, 200]
-            rgba[(banda == 3) & valido] = [255, 0, 0, 200]
+            # Soporte para rasters clasificados por enteros (1,2,3) o floats continuos
+            if np.any((banda == 1) | (banda == 2) | (banda == 3)):
+                rgba[(banda == 1) & valido] = [255, 255, 0, 200]
+                rgba[(banda == 2) & valido] = [255, 153, 0, 200]
+                rgba[(banda == 3) & valido] = [255, 0, 0, 200]
+            else:
+                rgba[(banda >= 0.10) & (banda < 0.27) & valido] = [255, 255, 0, 200]   # Baja
+                rgba[(banda >= 0.27) & (banda < 0.44) & valido] = [255, 153, 0, 200]  # Moderada
+                rgba[(banda >= 0.44) & valido] = [255, 0, 0, 200]                     # Alta
             
         elif tipo == "ndvi":
-            # Gradiente de pérdida (Amarillo a Rojo oscuro)
             vmin, vmax = np.percentile(banda[valido], (2, 98)) if np.any(valido) else (0, 100)
             norm = np.clip((banda - vmin) / (vmax - vmin + 1e-9), 0, 1)
             colormap = matplotlib.colormaps["YlOrRd"]
@@ -68,7 +109,6 @@ def procesar_raster_color(ruta, tipo):
             rgba[~valido, 3] = 0
             
         elif tipo == "dem":
-            # Gradiente de terreno
             vmin, vmax = np.percentile(banda[valido], (2, 98)) if np.any(valido) else (0, 1000)
             norm = np.clip((banda - vmin) / (vmax - vmin + 1e-9), 0, 1)
             colormap = matplotlib.colormaps["terrain"]
@@ -76,7 +116,6 @@ def procesar_raster_color(ruta, tipo):
             rgba[~valido, 3] = 0
             
         elif tipo == "uso":
-            # Clasificación de uso de vegetación
             unicos = np.unique(banda[valido])
             colores = [(0,100,0), (217,95,2), (189,189,189), (254,224,139), (128,177,211)]
             for i, val in enumerate(unicos[:5]):
@@ -90,7 +129,7 @@ def procesar_raster_color(ruta, tipo):
         return img_b64, bounds
 
 # ─────────────────────────────────────────────────────────────
-# SIDEBAR: CONTROL DE CAPAS
+# 4. SIDEBAR: PANEL DE CONTROL DE CAPAS
 # ─────────────────────────────────────────────────────────────
 st.sidebar.title("Control de Capas")
 
@@ -106,7 +145,7 @@ show_ndvi = st.sidebar.checkbox("Pérdida de NDVI (%)", value=False)
 show_severidad = st.sidebar.checkbox("Severidad dNBR (Solo Quemado)", value=True)
 
 # ─────────────────────────────────────────────────────────────
-# INICIALIZACIÓN DEL MAPA
+# 5. INICIALIZACIÓN DEL MAPA FOLIUM
 # ─────────────────────────────────────────────────────────────
 m = folium.Map(location=[-33.08, -71.48], zoom_start=11, tiles="OpenStreetMap")
 folium.TileLayer("CartoDB positron", name="Mapa claro").add_to(m)
@@ -114,7 +153,7 @@ folium.TileLayer("CartoDB positron", name="Mapa claro").add_to(m)
 capas_raster_activas = []
 
 # ─────────────────────────────────────────────────────────────
-# CARGA Y RENDERIZADO DE RASTERS
+# 6. CARGA Y RENDERIZADO DE RASTERS
 # ─────────────────────────────────────────────────────────────
 if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
     with st.spinner("Cargando Severidad..."):
@@ -122,6 +161,8 @@ if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
         capa = folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img}", bounds=bnds, name="🔥 Severidad dNBR")
         capa.add_to(m)
         capas_raster_activas.append(capa)
+        # Añadir leyenda al mapa interactivo
+        m.get_root().html.add_child(folium.Element(generar_leyenda_severidad_html()))
 
 if show_ndvi and (DATA / "VALPO_perdida_NDVI_pct.tif").exists():
     with st.spinner("Cargando Pérdida NDVI..."):
@@ -143,13 +184,13 @@ if show_dem and (DATA / "dem30.tif").exists():
         capa = folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img}", bounds=bnds, name="⛰️ DEM 30m")
         capa.add_to(m)
 
-# Comparador automático si hay exactamente 2 rasters analíticos activos
+# Activar modo comparador si exactamente 2 rasters están encendidos
 if len(capas_raster_activas) == 2:
     plugins.SideBySideLayers(layer_left=capas_raster_activas[0], layer_right=capas_raster_activas[1]).add_to(m)
     st.info("💡 **Modo Comparador activado:** Desliza la barra central para comparar las capas raster.")
 
 # ─────────────────────────────────────────────────────────────
-# CARGA Y RENDERIZADO DE VECTORES
+# 7. CARGA Y RENDERIZADO DE VECTORES
 # ─────────────────────────────────────────────────────────────
 if show_pobladas and (DATA / "AreasPobladas.shp").exists():
     gdf_pob = gpd.read_file(DATA / "AreasPobladas.shp").to_crs(4326)
@@ -176,38 +217,38 @@ if show_red_vial and (DATA / "redVial.shp").exists():
     ).add_to(m)
 
 # ─────────────────────────────────────────────────────────────
-# RENDERIZADO FINAL DEL MAPA
+# 8. VISUALIZACIÓN DEL MAPA EN LA APP
 # ─────────────────────────────────────────────────────────────
 folium.LayerControl(collapsed=False).add_to(m)
 st_folium(m, width=1200, height=650)
 
 # ─────────────────────────────────────────────────────────────
-# DASHBOARD: ESTADÍSTICAS Y TABLAS
+# 9. DASHBOARD: ESTADÍSTICAS Y GRÁFICOS INTERACTIVOS
 # ─────────────────────────────────────────────────────────────
 st.markdown("---")
 st.header("📊 Análisis Territorial Detallado")
 
 try:
-    # 1. MÉTRICA GLOBAL: Red Vial
+    # 9.1 MÉTRICA GLOBAL: Longitud de Red Vial
     if show_red_vial and 'gdf_vial' in locals():
         if gdf_vial.crs is None:
             gdf_vial = gdf_vial.set_crs(4326)
+        # Reproyección a UTM 19S (EPSG:32719) para medición precisa en metros
         gdf_vial_utm = gdf_vial.to_crs(32719)
         longitud_km = gdf_vial_utm.geometry.length.sum() / 1000
         st.metric("🛣️ Longitud Total de la Red Vial Afectada / Analizada", f"{longitud_km:,.1f} km")
         st.markdown("---")
 
-    # Dividir la pantalla en dos columnas
     col_tabla, col_grafico = st.columns(2)
 
-    # 2. TABLA INTERACTIVA: Áreas Pobladas
+    # 9.2 TABLA DE ATRIBUTOS: Áreas Pobladas
     if show_pobladas and 'gdf_pob' in locals():
         with col_tabla:
             st.subheader("🏙️ Registro de Áreas Pobladas")
             cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
             st.dataframe(gdf_pob[cols_mostrar], height=400, use_container_width=True)
 
-    # 3. GRÁFICO ESTADÍSTICO: Áreas Protegidas (SNASPE)
+    # 9.3 GRÁFICO DE BARRAS: Áreas Protegidas SNASPE
     if show_snaspe and 'gdf_snaspe' in locals():
         with col_grafico:
             st.subheader("🌲 Superficie de Áreas Protegidas")
