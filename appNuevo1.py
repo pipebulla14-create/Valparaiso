@@ -231,34 +231,42 @@ st.markdown("---")
 st.header("📊 Análisis Territorial Detallado")
 
 try:
-    # 9.3 GRÁFICO DE BARRAS DE SEVERIDAD
+  # 9.3 PANEL DE MÉTRICAS: Superficie por Nivel de Daño
     if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
-        with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
-            banda = src.read(1)
-            nodata = src.nodata if src.nodata is not None else 0
-            valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
+        with col_grafico:
+            st.subheader("🔥 Superficie por Nivel de Daño (ha)")
             
-            # Cálculo área
-            area_pixel_ha = abs(src.res[0] * src.res[1]) / 10000
-            
-            # Blindaje escala
-            max_val = np.nanmax(np.where(valido, banda, np.nan))
-            if max_val > 5:
-                ha_baja, ha_mod, ha_alta = np.sum((banda >= 100) & (banda < 270) & valido)*area_pixel_ha, np.sum((banda >= 270) & (banda < 440) & valido)*area_pixel_ha, np.sum((banda >= 440) & valido)*area_pixel_ha
-            elif np.any((banda == 1) | (banda == 2) | (banda == 3)):
-                ha_baja, ha_mod, ha_alta = np.sum((banda == 1) & valido)*area_pixel_ha, np.sum((banda == 2) & valido)*area_pixel_ha, np.sum((banda == 3) & valido)*area_pixel_ha
-            else:
-                ha_baja, ha_mod, ha_alta = np.sum((banda >= 0.10) & (banda < 0.27) & valido)*area_pixel_ha, np.sum((banda >= 0.27) & (banda < 0.44) & valido)*area_pixel_ha, np.sum((banda >= 0.44) & valido)*area_pixel_ha
-            
-            plt.rcParams.update({'font.size': 20})
-            fig, ax = plt.subplots(figsize=(8, 6))
-            ax.bar(['Baja', 'Moderada', 'Alta'], [ha_baja, ha_mod, ha_alta], color=['#FFFF00', '#FF9900', '#FF0000'], edgecolor='black', linewidth=2)
-            ax.set_ylabel("Hectáreas (ha)", fontsize=22, fontweight='bold')
-            st.pyplot(fig)
-            
-    if show_pobladas and 'gdf_pob' in locals():
-        st.subheader("🏙️ Registro de Áreas Pobladas")
-        st.dataframe(gdf_pob.drop(columns='geometry'), width=1200)
+            with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
+                banda = src.read(1)
+                nodata = src.nodata if src.nodata is not None else 0
+                valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
+                
+                # Cálculo de área por píxel (hectáreas)
+                area_pixel_ha = abs(src.res[0] * src.res[1]) / 10000
+                
+                # Blindaje escala: Detectamos si son enteros o decimales
+                max_val = np.nanmax(np.where(valido, banda, np.nan))
+                
+                if max_val > 5:
+                    ha_baja = np.sum((banda >= 100) & (banda < 270) & valido) * area_pixel_ha
+                    ha_mod  = np.sum((banda >= 270) & (banda < 440) & valido) * area_pixel_ha
+                    ha_alta = np.sum((banda >= 440) & valido) * area_pixel_ha
+                elif np.any((banda == 1) | (banda == 2) | (banda == 3)):
+                    ha_baja = np.sum((banda == 1) & valido) * area_pixel_ha
+                    ha_mod  = np.sum((banda == 2) & valido) * area_pixel_ha
+                    ha_alta = np.sum((banda == 3) & valido) * area_pixel_ha
+                else:
+                    ha_baja = np.sum((banda >= 0.10) & (banda < 0.27) & valido) * area_pixel_ha
+                    ha_mod  = np.sum((banda >= 0.27) & (banda < 0.44) & valido) * area_pixel_ha
+                    ha_alta = np.sum((banda >= 0.44) & valido) * area_pixel_ha
+                
+                # Presentación en formato métrico limpio (sin gráficos)
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Severidad Baja", f"{ha_baja:,.1f} ha")
+                col2.metric("Severidad Moderada", f"{ha_mod:,.1f} ha")
+                col3.metric("Severidad Alta", f"{ha_alta:,.1f} ha")
+                
+                st.info("Nota: Los valores representan la superficie calculada a partir del raster de severidad dNBR.")
 
 except Exception as e:
-    st.error(f"Error en dashboard: {e}")
+    st.error(f"Error al cargar el panel de estadísticas: {e}")
