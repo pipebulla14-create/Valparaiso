@@ -19,12 +19,14 @@ st.set_page_config(page_title="GeoVisualizador Valparaíso", layout="wide")
 st.title("🔥 GeoVisualizador de Severidad de Incendios - Valparaíso 2024")
 st.write("Análisis territorial de daños utilizando imágenes satelitales y datos oficiales.")
 
+# Directorio de datos espaciales
 DATA = Path("data")
 
 # ─────────────────────────────────────────────────────────────
 # 2. LEYENDAS INTERNAS DEL MAPA (HTML)
 # ─────────────────────────────────────────────────────────────
 def generar_leyenda_severidad_html():
+    """Genera un cuadro de leyenda flotante con diseño moderno para el mapa interactivo."""
     return """
     <div style="
         position: fixed; 
@@ -63,9 +65,10 @@ def generar_leyenda_severidad_html():
     """
 
 # ─────────────────────────────────────────────────────────────
-# 3. FUNCIONES DE PROCESAMIENTO RASTER Y CÁLCULO
+# 3. FUNCIONES DE PROCESAMIENTO RASTER
 # ─────────────────────────────────────────────────────────────
 def reproyectar_raster(src):
+    """Reproyecta un raster a WGS84 (EPSG:4326) para lectura en Folium."""
     if src.crs and src.crs.to_epsg() != 4326:
         transform, width, height = calculate_default_transform(
             src.crs, "EPSG:4326", src.width, src.height, *src.bounds
@@ -84,6 +87,7 @@ def reproyectar_raster(src):
     return data[0], bounds_wgs84
 
 def procesar_raster_color(ruta, tipo):
+    """Asigna colores cartográficos a los valores del raster y lo convierte a imagen B64."""
     with rasterio.open(ruta) as src:
         banda, bounds_wgs84 = reproyectar_raster(src)
         rgba = np.zeros((banda.shape[0], banda.shape[1], 4), dtype=np.uint8)
@@ -129,16 +133,19 @@ def procesar_raster_color(ruta, tipo):
         return img_b64, bounds
 
 def calcular_area_quemada(ruta):
+    """Calcula las hectáreas totales quemadas leyendo los píxeles del raster."""
     with rasterio.open(ruta) as src:
         banda = src.read(1)
         nodata = src.nodata if src.nodata is not None else 0
         valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
         
+        # Identificamos todos los píxeles que superen el umbral mínimo de quemado (baja severidad o más)
         if np.any((banda == 1) | (banda == 2) | (banda == 3)):
             quemado = ((banda == 1) | (banda == 2) | (banda == 3)) & valido
         else:
             quemado = (banda >= 0.10) & valido
             
+        # Si el raster está en grados, aproximamos resolución a 30x30m. Si está en metros, usamos su resolución real.
         if src.crs and not src.crs.is_projected:
             area_pixel_m2 = 30 * 30
         else:
@@ -187,6 +194,7 @@ if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
         capa = folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img}", bounds=bnds, name="🔥 Severidad dNBR")
         capa.add_to(m)
         capas_raster_activas.append(capa)
+        # Añadir leyenda moderna al mapa interactivo
         m.get_root().html.add_child(folium.Element(generar_leyenda_severidad_html()))
 
 if show_ndvi and (DATA / "VALPO_perdida_NDVI_pct.tif").exists():
@@ -209,6 +217,7 @@ if show_dem and (DATA / "dem30.tif").exists():
         capa = folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img}", bounds=bnds, name="⛰️ DEM 30m")
         capa.add_to(m)
 
+# Activar modo comparador si exactamente 2 rasters están encendidos
 if len(capas_raster_activas) == 2:
     plugins.SideBySideLayers(layer_left=capas_raster_activas[0], layer_right=capas_raster_activas[1]).add_to(m)
     st.info("💡 **Modo Comparador activado:** Desliza la barra central para comparar las capas raster.")
@@ -220,8 +229,7 @@ if show_pobladas and (DATA / "AreasPobladas.shp").exists():
     gdf_pob = gpd.read_file(DATA / "AreasPobladas.shp").to_crs(4326)
     folium.GeoJson(
         gdf_pob, name="🏙️ Áreas Pobladas",
-        # Cambiamos fillColor a azul acero y color de borde a azul oscuro
-        style_function=lambda x: {"fillColor": "#2980B9", "color": "#1C5980", "weight": 1.5, "fillOpacity": 0.5},
+        style_function=lambda x: {"fillColor": "#B22222", "color": "#7A1515", "weight": 1.5, "fillOpacity": 0.45},
         tooltip=folium.GeoJsonTooltip(fields=list(gdf_pob.columns[:2])) if len(gdf_pob.columns) > 1 else "Área Poblada"
     ).add_to(m)
 
@@ -254,62 +262,87 @@ st.markdown("---")
 st.header("📊 Análisis Territorial Detallado")
 
 try:
-    # 9.1 MÉTRICAS GLOBALES (3 Columnas ahora)
-    col_m1, col_m2, col_m3 = st.columns(3)
+    # 9.1 MÉTRICAS GLOBALES
+    col_m1, col_m2 = st.columns(2)
     
     with col_m1:
         if show_red_vial and 'gdf_vial' in locals():
-            if gdf_vial.crs is None: gdf_vial = gdf_vial.set_crs(4326)
-            longitud_km = gdf_vial.to_crs(32719).geometry.length.sum() / 1000
-            st.metric("🛣️ Red Vial Total", f"{longitud_km:,.1f} km")
+            if gdf_vial.crs is None:
+                gdf_vial = gdf_vial.set_crs(4326)
+            gdf_vial_utm = gdf_vial.to_crs(32719)
+            longitud_km = gdf_vial_utm.geometry.length.sum() / 1000
+            st.metric("🛣️ Red Vial Afectada / Analizada", f"{longitud_km:,.1f} km")
             
     with col_m2:
         if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
             ha_quemadas = calcular_area_quemada(DATA / "VALPO_severidad_dNBR_solo_quemado.tif")
-            st.metric("🔥 Superficie Total Quemada", f"{ha_quemadas:,.1f} ha")
+            st.metric("🔥 Superficie Total Quemada", f"{ha_quemadas:,.1f} hectáreas")
             
-    with col_m3:
-        # 9.4 CÁLCULO DE ÁREA POBLADA QUEMADA (Dentro de la columna)
-        if show_pobladas and show_severidad and 'gdf_pob' in locals():
-            with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
-                gdf_pob_proj = gdf_pob.to_crs(src.crs)
-                if gdf_pob_proj.intersects(gpd.GeoSeries([gpd.box(*src.bounds)], crs=src.crs)).any():
-                    geoms = gdf_pob_proj.geometry.values
-                    out_image, _ = mask(src, geoms, crop=True, nodata=0)
-                    area_pixel_ha = abs(src.res[0] * src.res[1]) / 10000
-                    # Calculamos usando el valor real detectado
-                    ha_urbana_quemada = np.sum(out_image[0] > 0.1) * area_pixel_ha
-                    st.metric("🏘️ Área Poblada Quemada", f"{ha_urbana_quemada:,.1f} ha")
-                else:
-                    st.metric("🏘️ Área Poblada Quemada", "N/A")
-
     st.markdown("---")
+
     col_tabla, col_grafico = st.columns(2)
 
-    # 9.2 TABLA DE ATRIBUTOS
+    # 9.2 TABLA DE ATRIBUTOS (CON NOMBRES LIMPIOS Y WARNING CORREGIDO)
     if show_pobladas and 'gdf_pob' in locals():
         with col_tabla:
             st.subheader("🏙️ Registro de Áreas Pobladas")
-            df_limpio = gdf_pob.drop(columns='geometry').rename(columns={
-                "objectid": "ID", "st_area_sh": "Área (m²)", "st_length_": "Perímetro (m)", "comuna": "Comuna"
+            cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
+            df_limpio = gdf_pob[cols_mostrar].copy()
+            
+            # Renombramos las columnas crudas del Shapefile por nombres limpios para la presentación
+            df_limpio = df_limpio.rename(columns={
+                "objectid": "ID",
+                "st_area_sh": "Área (m²)",
+                "st_length_": "Perímetro (m)",
+                "comuna": "Comuna"
             })
-            st.dataframe(df_limpio, height=350, use_container_width=True)
+            # width="stretch" soluciona la advertencia de Streamlit (use_container_width deprecado)
+            st.dataframe(df_limpio, height=300, width="stretch")
+            
+            # NUEVO: Botón de Descarga CSV
+            csv = df_limpio.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Descargar datos como CSV",
+                data=csv,
+                file_name='areas_pobladas_valpo.csv',
+                mime='text/csv',
+            )
 
-    # 9.3 GRÁFICO DE BARRAS DE SEVERIDAD
+    # 9.3 GRÁFICO CIRCULAR DE SEVERIDAD
     if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
         with col_grafico:
-            st.subheader("🔥 Superficie por Nivel de Daño")
+            st.subheader("🔥 Distribución de la Severidad")
+            
             with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
-                banda = src.read(1); valido = (banda != 0) & (~np.isnan(banda))
-                area_pixel_ha = abs(src.res[0] * src.res[1]) / 10000
-                ha_baja = np.sum((banda >= 0.1) & (banda < 0.27) & valido) * area_pixel_ha
-                ha_mod = np.sum((banda >= 0.27) & (banda < 0.44) & valido) * area_pixel_ha
-                ha_alta = np.sum((banda >= 0.44) & valido) * area_pixel_ha
+                banda = src.read(1)
+                nodata = src.nodata if src.nodata is not None else 0
+                valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
                 
-                fig, ax = plt.subplots(figsize=(8, 4))
-                ax.bar(['Baja', 'Moderada', 'Alta'], [ha_baja, ha_mod, ha_alta], color=['#FFFF00', '#FF9900', '#FF0000'], edgecolor='black')
-                ax.set_ylabel("Hectáreas (ha)")
-                st.pyplot(fig)
+                if np.any((banda == 1) | (banda == 2) | (banda == 3)):
+                    baja = np.sum((banda == 1) & valido)
+                    mod = np.sum((banda == 2) & valido)
+                    alta = np.sum((banda == 3) & valido)
+                else:
+                    baja = np.sum((banda >= 0.10) & (banda < 0.27) & valido)
+                    mod = np.sum((banda >= 0.27) & (banda < 0.44) & valido)
+                    alta = np.sum((banda >= 0.44) & valido)
+                
+                # Configuramos un tamaño de fuente de 24 para legibilidad óptica, como solicitaste previamente
+                plt.rcParams.update({'font.size': 24})
+                fig, ax = plt.subplots(figsize=(8, 6))
+                tamaños = [baja, mod, alta]
+                etiquetas = ['Baja', 'Moderada', 'Alta']
+                colores = ['#FFFF00', '#FF9900', '#FF0000']
+                
+                if sum(tamaños) > 0:
+                    ax.pie(tamaños, labels=etiquetas, colors=colores, autopct='%1.1f%%', 
+                           startangle=90, textprops={'fontsize': 24},
+                           wedgeprops={"edgecolor":"black", 'linewidth': 1})
+                    ax.axis('equal') 
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                else:
+                    st.info("No se detectaron áreas quemadas en la vista actual.")
 
 except Exception as e:
-    st.error(f"Error en dashboard: {e}")
+    st.error(f"Ocurrió un error al cargar el dashboard de estadísticas: {e}")
