@@ -139,8 +139,11 @@ def calcular_area_quemada(ruta):
         nodata = src.nodata if src.nodata is not None else 0
         valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
         
-        # Identificamos todos los píxeles que superen el umbral mínimo de quemado (baja severidad o más)
-        if np.any((banda == 1) | (banda == 2) | (banda == 3)):
+        # Identificamos todos los píxeles que superen el umbral mínimo de quemado
+        max_val = np.nanmax(np.where(valido, banda, np.nan))
+        if max_val > 5:
+            quemado = (banda >= 100) & valido
+        elif np.any((banda == 1) | (banda == 2) | (banda == 3)):
             quemado = ((banda == 1) | (banda == 2) | (banda == 3)) & valido
         else:
             quemado = (banda >= 0.10) & valido
@@ -289,17 +292,17 @@ try:
             cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
             df_limpio = gdf_pob[cols_mostrar].copy()
             
-            # Renombramos las columnas crudas del Shapefile por nombres limpios para la presentación
+            # Renombramos las columnas crudas del Shapefile por nombres limpios
             df_limpio = df_limpio.rename(columns={
                 "objectid": "ID",
                 "st_area_sh": "Área (m²)",
                 "st_length_": "Perímetro (m)",
                 "comuna": "Comuna"
             })
-            # width="stretch" soluciona la advertencia de Streamlit (use_container_width deprecado)
-            st.dataframe(df_limpio, height=300, width="stretch")
+            # width="stretch" soluciona la advertencia de Streamlit
+            st.dataframe(df_limpio, height=350, width="stretch")
             
-            # NUEVO: Botón de Descarga CSV
+            # Botón de Descarga CSV
             csv = df_limpio.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Descargar datos como CSV",
@@ -308,60 +311,68 @@ try:
                 mime='text/csv',
             )
 
-    # 9.3 GRÁFICO CIRCULAR DE SEVERIDAD
+    # 9.3 GRÁFICO DE BARRAS DE SEVERIDAD (Hectáreas)
     if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
         with col_grafico:
-            st.subheader("🔥 Distribución de la Severidad")
+            st.subheader("🔥 Superficie por Nivel de Daño")
             
             with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
                 banda = src.read(1)
                 nodata = src.nodata if src.nodata is not None else 0
                 valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
                 
-                # CORRECCIÓN VITAL: Diferenciar si el raster tiene valores enteros (1, 2, 3) o decimales
-                if np.any((banda == 1) | (banda == 2) | (banda == 3)):
-                    baja = float(np.sum((banda == 1) & valido))
-                    mod = float(np.sum((banda == 2) & valido))
-                    alta = float(np.sum((banda == 3) & valido))
+                # Cálculo de área por píxel (hectáreas)
+                if src.crs and not src.crs.is_projected:
+                    area_pixel_ha = (30 * 30) / 10000
                 else:
-                    baja = float(np.sum((banda >= 0.10) & (banda < 0.27) & valido))
-                    mod = float(np.sum((banda >= 0.27) & (banda < 0.44) & valido))
-                    alta = float(np.sum((banda >= 0.44) & valido))
+                    area_pixel_ha = abs(src.res[0] * src.res[1]) / 10000
                 
-                # FILTRO DINÁMICO: Solo agrega al gráfico las categorías que tienen área real
-                datos = []
-                etiquetas = []
-                colores = []
+                # BLINDAJE: Detectamos automáticamente la escala del raster
+                max_val = np.nanmax(np.where(valido, banda, np.nan))
                 
-                if baja > 0:
-                    datos.append(baja)
-                    etiquetas.append('Baja')
-                    colores.append('#FFFF00')
-                if mod > 0:
-                    datos.append(mod)
-                    etiquetas.append('Moderada')
-                    colores.append('#FF9900')
-                if alta > 0:
-                    datos.append(alta)
-                    etiquetas.append('Alta')
-                    colores.append('#FF0000')
+                if max_val > 5:
+                    ha_baja = np.sum((banda >= 100) & (banda < 270) & valido) * area_pixel_ha
+                    ha_mod  = np.sum((banda >= 270) & (banda < 440) & valido) * area_pixel_ha
+                    ha_alta = np.sum((banda >= 440) & valido) * area_pixel_ha
+                elif np.any((banda == 1) | (banda == 2) | (banda == 3)):
+                    ha_baja = np.sum((banda == 1) & valido) * area_pixel_ha
+                    ha_mod  = np.sum((banda == 2) & valido) * area_pixel_ha
+                    ha_alta = np.sum((banda == 3) & valido) * area_pixel_ha
+                else:
+                    ha_baja = np.sum((banda >= 0.10) & (banda < 0.27) & valido) * area_pixel_ha
+                    ha_mod  = np.sum((banda >= 0.27) & (banda < 0.44) & valido) * area_pixel_ha
+                    ha_alta = np.sum((banda >= 0.44) & valido) * area_pixel_ha
                 
-                # Configuración óptica para presentación (fuente 24)
-                plt.rcParams.update({'font.size': 24})
+                # Configuración óptica para presentación
+                plt.rcParams.update({'font.size': 20})
                 fig, ax = plt.subplots(figsize=(8, 6))
-                
-                # Hacemos el fondo de la figura transparente
                 fig.patch.set_alpha(0.0)
                 ax.set_facecolor((0, 0, 0, 0))
                 
-                if len(datos) > 0:
-                    ax.pie(datos, labels=etiquetas, colors=colores, autopct='%1.1f%%', 
-                           startangle=90, textprops={'fontsize': 24, 'color': 'black', 'weight': 'bold'},
-                           wedgeprops={"edgecolor":"black", 'linewidth': 2})
-                    ax.axis('equal') 
+                etiquetas = ['Baja', 'Moderada', 'Alta']
+                valores = [ha_baja, ha_mod, ha_alta]
+                colores = ['#FFFF00', '#FF9900', '#FF0000']
+                
+                if sum(valores) > 0:
+                    barras = ax.bar(etiquetas, valores, color=colores, edgecolor='black', linewidth=2)
+                    ax.set_ylabel("Hectáreas (ha)", fontsize=22, fontweight='bold')
+                    
+                    # Anotar hectáreas sobre las barras
+                    for barra in barras:
+                        altura = barra.get_height()
+                        if altura > 0:
+                            ax.annotate(f'{altura:,.1f}',
+                                        xy=(barra.get_x() + barra.get_width() / 2, altura),
+                                        xytext=(0, 5),  
+                                        textcoords="offset points",
+                                        ha='center', va='bottom', fontsize=20, fontweight='bold', color='#333333')
+                    
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    
                     plt.tight_layout()
                     
-                    # El theme=None fuerza a Streamlit a usar los colores puros y evitar el tono "lavado"
+                    # theme=None evita que Streamlit lave los colores puros
                     st.pyplot(fig, theme=None)
                 else:
                     st.info("No se detectaron áreas quemadas válidas en el análisis.")
