@@ -76,7 +76,7 @@ def procesar_raster_color(ruta, tipo):
             rgba[~valido, 3] = 0
             
         elif tipo == "uso":
-            # Clasificación de uso de vegetación (Colores aleatorios base, puedes ajustar)
+            # Clasificación de uso de vegetación
             unicos = np.unique(banda[valido])
             colores = [(0,100,0), (217,95,2), (189,189,189), (254,224,139), (128,177,211)]
             for i, val in enumerate(unicos[:5]):
@@ -97,6 +97,7 @@ st.sidebar.title("Control de Capas")
 st.sidebar.subheader("🗺️ Capas Vectoriales")
 show_pobladas = st.sidebar.checkbox("Áreas Pobladas", value=True)
 show_snaspe = st.sidebar.checkbox("Áreas SNASPE (Protegidas)", value=True)
+show_red_vial = st.sidebar.checkbox("Red Vial (Caminos)", value=True)
 
 st.sidebar.subheader("🛰️ Imágenes / Rasters")
 show_dem = st.sidebar.checkbox("Modelo de Elevación (DEM 30m)", value=False)
@@ -110,7 +111,6 @@ show_severidad = st.sidebar.checkbox("Severidad dNBR (Solo Quemado)", value=True
 m = folium.Map(location=[-33.08, -71.48], zoom_start=11, tiles="OpenStreetMap")
 folium.TileLayer("CartoDB positron", name="Mapa claro").add_to(m)
 
-# Diccionario para almacenar las capas raster activas y armar el comparador
 capas_raster_activas = []
 
 # ─────────────────────────────────────────────────────────────
@@ -167,73 +167,80 @@ if show_snaspe and (DATA / "AreasSnaspe.shp").exists():
         tooltip=folium.GeoJsonTooltip(fields=list(gdf_snaspe.columns[:2])) if len(gdf_snaspe.columns) > 1 else "SNASPE"
     ).add_to(m)
 
+if show_red_vial and (DATA / "redVial.shp").exists():
+    gdf_vial = gpd.read_file(DATA / "redVial.shp").to_crs(4326)
+    folium.GeoJson(
+        gdf_vial, name="🛣️ Red Vial",
+        style_function=lambda x: {"color": "#333333", "weight": 2, "opacity": 0.8},
+        tooltip=folium.GeoJsonTooltip(fields=list(gdf_vial.columns[:2])) if len(gdf_vial.columns) > 1 else "Vía"
+    ).add_to(m)
+
 # ─────────────────────────────────────────────────────────────
-# RENDERIZADO FINAL
+# RENDERIZADO FINAL DEL MAPA
 # ─────────────────────────────────────────────────────────────
 folium.LayerControl(collapsed=False).add_to(m)
 st_folium(m, width=1200, height=650)
+
 # ─────────────────────────────────────────────────────────────
-# DASHBOARD: ESTADÍSTICAS Y TABLAS (Funcionalidades Avanzadas)
+# DASHBOARD: ESTADÍSTICAS Y TABLAS
 # ─────────────────────────────────────────────────────────────
 st.markdown("---")
 st.header("📊 Análisis Territorial Detallado")
 
-# Dividir la pantalla en dos columnas para mejor estética
-col_tabla, col_grafico = st.columns(2)
+try:
+    # 1. MÉTRICA GLOBAL: Red Vial
+    if show_red_vial and 'gdf_vial' in locals():
+        if gdf_vial.crs is None:
+            gdf_vial = gdf_vial.set_crs(4326)
+        gdf_vial_utm = gdf_vial.to_crs(32719)
+        longitud_km = gdf_vial_utm.geometry.length.sum() / 1000
+        st.metric("🛣️ Longitud Total de la Red Vial Afectada / Analizada", f"{longitud_km:,.1f} km")
+        st.markdown("---")
 
-# 1. TABLA INTERACTIVA: Áreas Pobladas
-if show_pobladas and 'gdf_pob' in locals():
-    with col_tabla:
-        st.subheader("🏙️ Registro de Áreas Pobladas")
-        st.write("Explora los atributos de los polígonos urbanos:")
-        
-        # Filtramos la columna 'geometry' porque no se lee bien en tablas
-        cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
-        
-        # st.dataframe crea una tabla interactiva (ordenable y con scroll)
-        st.dataframe(gdf_pob[cols_mostrar], height=400, use_container_width=True)
+    # Dividir la pantalla en dos columnas
+    col_tabla, col_grafico = st.columns(2)
 
-# 2. GRÁFICO ESTADÍSTICO: Áreas Protegidas (SNASPE)
-if show_snaspe and 'gdf_snaspe' in locals():
-    with col_grafico:
-        st.subheader("🌲 Superficie de Áreas Protegidas (ha)")
-        
-        # Calcular el área en hectáreas (reproyectando a UTM 19S para medir en metros)
-        gdf_snaspe_utm = gdf_snaspe.to_crs(32719)
-        gdf_snaspe['Area_ha'] = gdf_snaspe_utm.geometry.area / 10000
-        
-        # Buscamos la columna que tenga los nombres (o usamos el índice por defecto)
-        cols_texto = gdf_snaspe.select_dtypes(include=['object']).columns
-        eje_x = gdf_snaspe[cols_texto[0]].astype(str) if len(cols_texto) > 0 else gdf_snaspe.index.astype(str)
-        
-        # Crear gráfico con Matplotlib
-        fig, ax = plt.subplots(figsize=(10, 7))
-        
-        # Configuramos tamaños de fuente grandes para legibilidad óptica
-        plt.rcParams.update({'font.size': 24})
-        
-        barras = ax.bar(eje_x, gdf_snaspe['Area_ha'], color="#2E7D32", edgecolor="black")
-        
-        ax.set_ylabel("Hectáreas (ha)", fontsize=24)
-        ax.set_xlabel("Unidad SNASPE", fontsize=24)
-        plt.xticks(rotation=45, ha='right', fontsize=24)
-        plt.yticks(fontsize=24)
-        
-        # Identificar el polígono más grande para destacarlo con una flecha
-        max_idx = gdf_snaspe['Area_ha'].idxmax()
-        max_val = gdf_snaspe['Area_ha'].max()
-        
-        ax.annotate(
-            'Mayor extensión', 
-            xy=(max_idx, max_val), 
-            xytext=(max_idx, max_val * 1.15),
-            arrowprops=dict(facecolor='black', shrink=0.05, width=5, headwidth=15),
-            fontsize=24, 
-            ha='center'
-        )
-        
-        # Ajustar los márgenes para que no se corten los textos
-        plt.tight_layout()
-        
-        # Renderizar en la app
-        st.pyplot(fig)
+    # 2. TABLA INTERACTIVA: Áreas Pobladas
+    if show_pobladas and 'gdf_pob' in locals():
+        with col_tabla:
+            st.subheader("🏙️ Registro de Áreas Pobladas")
+            cols_mostrar = [c for c in gdf_pob.columns if c != "geometry"]
+            st.dataframe(gdf_pob[cols_mostrar], height=400, use_container_width=True)
+
+    # 3. GRÁFICO ESTADÍSTICO: Áreas Protegidas (SNASPE)
+    if show_snaspe and 'gdf_snaspe' in locals():
+        with col_grafico:
+            st.subheader("🌲 Superficie de Áreas Protegidas")
+            if gdf_snaspe.crs is None:
+                gdf_snaspe = gdf_snaspe.set_crs(4326)
+                
+            gdf_snaspe_utm = gdf_snaspe.to_crs(32719)
+            gdf_snaspe['Area_ha'] = gdf_snaspe_utm.geometry.area / 10000
+            
+            cols_texto = gdf_snaspe.select_dtypes(include=['object']).columns
+            eje_x = gdf_snaspe[cols_texto[0]].astype(str) if len(cols_texto) > 0 else gdf_snaspe.index.astype(str)
+            
+            fig, ax = plt.subplots(figsize=(10, 7))
+            plt.rcParams.update({'font.size': 24})
+            
+            ax.bar(eje_x, gdf_snaspe['Area_ha'], color="#2E7D32", edgecolor="black")
+            ax.set_ylabel("Hectáreas (ha)", fontsize=24)
+            plt.xticks(rotation=45, ha='right', fontsize=24)
+            
+            if not gdf_snaspe.empty:
+                max_idx = gdf_snaspe['Area_ha'].idxmax()
+                max_val = gdf_snaspe['Area_ha'].max()
+                ax.annotate(
+                    'Mayor extensión', 
+                    xy=(max_idx, max_val), 
+                    xytext=(max_idx, max_val * 1.15),
+                    arrowprops=dict(facecolor='black', shrink=0.05, width=5, headwidth=15),
+                    fontsize=24, 
+                    ha='center'
+                )
+            
+            plt.tight_layout()
+            st.pyplot(fig)
+
+except Exception as e:
+    st.error(f"Ocurrió un error al cargar el dashboard de estadísticas: {e}")
