@@ -19,12 +19,14 @@ st.set_page_config(page_title="GeoVisualizador Valparaíso", layout="wide")
 st.title("🔥 GeoVisualizador de Severidad de Incendios - Valparaíso 2024")
 st.write("Análisis territorial de daños utilizando imágenes satelitales y datos oficiales.")
 
+# Directorio de datos espaciales
 DATA = Path("data")
 
 # ─────────────────────────────────────────────────────────────
 # 2. LEYENDAS INTERNAS DEL MAPA (HTML)
 # ─────────────────────────────────────────────────────────────
 def generar_leyenda_severidad_html():
+    """Genera un cuadro de leyenda flotante con diseño moderno para el mapa interactivo."""
     return """
     <div style="
         position: fixed; 
@@ -63,9 +65,10 @@ def generar_leyenda_severidad_html():
     """
 
 # ─────────────────────────────────────────────────────────────
-# 3. FUNCIONES DE PROCESAMIENTO RASTER Y CÁLCULO
+# 3. FUNCIONES DE PROCESAMIENTO RASTER
 # ─────────────────────────────────────────────────────────────
 def reproyectar_raster(src):
+    """Reproyecta un raster a WGS84 (EPSG:4326) para lectura en Folium."""
     if src.crs and src.crs.to_epsg() != 4326:
         transform, width, height = calculate_default_transform(
             src.crs, "EPSG:4326", src.width, src.height, *src.bounds
@@ -84,6 +87,7 @@ def reproyectar_raster(src):
     return data[0], bounds_wgs84
 
 def procesar_raster_color(ruta, tipo):
+    """Asigna colores cartográficos a los valores del raster y lo convierte a imagen B64."""
     with rasterio.open(ruta) as src:
         banda, bounds_wgs84 = reproyectar_raster(src)
         rgba = np.zeros((banda.shape[0], banda.shape[1], 4), dtype=np.uint8)
@@ -129,16 +133,19 @@ def procesar_raster_color(ruta, tipo):
         return img_b64, bounds
 
 def calcular_area_quemada(ruta):
+    """Calcula las hectáreas totales quemadas leyendo los píxeles del raster."""
     with rasterio.open(ruta) as src:
         banda = src.read(1)
         nodata = src.nodata if src.nodata is not None else 0
         valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
         
+        # Identificamos todos los píxeles que superen el umbral mínimo de quemado (baja severidad o más)
         if np.any((banda == 1) | (banda == 2) | (banda == 3)):
             quemado = ((banda == 1) | (banda == 2) | (banda == 3)) & valido
         else:
             quemado = (banda >= 0.10) & valido
             
+        # Si el raster está en grados, aproximamos resolución a 30x30m. Si está en metros, usamos su resolución real.
         if src.crs and not src.crs.is_projected:
             area_pixel_m2 = 30 * 30
         else:
@@ -187,6 +194,7 @@ if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
         capa = folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img}", bounds=bnds, name="🔥 Severidad dNBR")
         capa.add_to(m)
         capas_raster_activas.append(capa)
+        # Añadir leyenda moderna al mapa interactivo
         m.get_root().html.add_child(folium.Element(generar_leyenda_severidad_html()))
 
 if show_ndvi and (DATA / "VALPO_perdida_NDVI_pct.tif").exists():
@@ -209,6 +217,7 @@ if show_dem and (DATA / "dem30.tif").exists():
         capa = folium.raster_layers.ImageOverlay(image=f"data:image/png;base64,{img}", bounds=bnds, name="⛰️ DEM 30m")
         capa.add_to(m)
 
+# Activar modo comparador si exactamente 2 rasters están encendidos
 if len(capas_raster_activas) == 2:
     plugins.SideBySideLayers(layer_left=capas_raster_activas[0], layer_right=capas_raster_activas[1]).add_to(m)
     st.info("💡 **Modo Comparador activado:** Desliza la barra central para comparar las capas raster.")
@@ -287,42 +296,53 @@ try:
                 "st_length_": "Perímetro (m)",
                 "comuna": "Comuna"
             })
-            # width="stretch" reemplaza al antiguo use_container_width=True para eliminar la advertencia
-            st.dataframe(df_limpio, height=400, width="stretch")
+            # width="stretch" soluciona la advertencia de Streamlit (use_container_width deprecado)
+            st.dataframe(df_limpio, height=300, width="stretch")
+            
+            # NUEVO: Botón de Descarga CSV
+            csv = df_limpio.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Descargar datos como CSV",
+                data=csv,
+                file_name='areas_pobladas_valpo.csv',
+                mime='text/csv',
+            )
 
-    if show_snaspe and 'gdf_snaspe' in locals():
+    # 9.3 GRÁFICO CIRCULAR DE SEVERIDAD
+    if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
         with col_grafico:
-            st.subheader("🌲 Superficie de Áreas Protegidas")
-            if gdf_snaspe.crs is None:
-                gdf_snaspe = gdf_snaspe.set_crs(4326)
+            st.subheader("🔥 Distribución de la Severidad")
+            
+            with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
+                banda = src.read(1)
+                nodata = src.nodata if src.nodata is not None else 0
+                valido = (banda != nodata) & (~np.isnan(banda)) & (banda > -999)
                 
-            gdf_snaspe_utm = gdf_snaspe.to_crs(32719)
-            gdf_snaspe['Area_ha'] = gdf_snaspe_utm.geometry.area / 10000
-            
-            cols_texto = gdf_snaspe.select_dtypes(include=['object']).columns
-            eje_x = gdf_snaspe[cols_texto[0]].astype(str) if len(cols_texto) > 0 else gdf_snaspe.index.astype(str)
-            
-            fig, ax = plt.subplots(figsize=(10, 7))
-            plt.rcParams.update({'font.size': 24})
-            
-            ax.bar(eje_x, gdf_snaspe['Area_ha'], color="#2E7D32", edgecolor="black")
-            ax.set_ylabel("Hectáreas (ha)", fontsize=24)
-            plt.xticks(rotation=45, ha='right', fontsize=24)
-            
-            if not gdf_snaspe.empty:
-                max_idx = gdf_snaspe['Area_ha'].idxmax()
-                max_val = gdf_snaspe['Area_ha'].max()
-                ax.annotate(
-                    'Mayor extensión', 
-                    xy=(max_idx, max_val), 
-                    xytext=(max_idx, max_val * 1.15),
-                    arrowprops=dict(facecolor='black', shrink=0.05, width=5, headwidth=15),
-                    fontsize=24, 
-                    ha='center'
-                )
-            
-            plt.tight_layout()
-            st.pyplot(fig)
+                if np.any((banda == 1) | (banda == 2) | (banda == 3)):
+                    baja = np.sum((banda == 1) & valido)
+                    mod = np.sum((banda == 2) & valido)
+                    alta = np.sum((banda == 3) & valido)
+                else:
+                    baja = np.sum((banda >= 0.10) & (banda < 0.27) & valido)
+                    mod = np.sum((banda >= 0.27) & (banda < 0.44) & valido)
+                    alta = np.sum((banda >= 0.44) & valido)
+                
+                # Configuramos un tamaño de fuente de 24 para legibilidad óptica, como solicitaste previamente
+                plt.rcParams.update({'font.size': 24})
+                fig, ax = plt.subplots(figsize=(8, 6))
+                tamaños = [baja, mod, alta]
+                etiquetas = ['Baja', 'Moderada', 'Alta']
+                colores = ['#FFFF00', '#FF9900', '#FF0000']
+                
+                if sum(tamaños) > 0:
+                    ax.pie(tamaños, labels=etiquetas, colors=colores, autopct='%1.1f%%', 
+                           startangle=90, textprops={'fontsize': 24},
+                           wedgeprops={"edgecolor":"black", 'linewidth': 1})
+                    ax.axis('equal') 
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                else:
+                    st.info("No se detectaron áreas quemadas en la vista actual.")
 
 except Exception as e:
     st.error(f"Ocurrió un error al cargar el dashboard de estadísticas: {e}")
