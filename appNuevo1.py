@@ -313,3 +313,15 @@ try:
 
 except Exception as e:
     st.error(f"Ocurrió un error al cargar el dashboard de estadísticas: {e}")
+    # 9.4 CÁLCULO DE ÁREA POBLADA QUEMADA
+if show_pobladas and show_severidad and 'gdf_pob' in locals():
+    # 1. Asegurar que ambos datos estén en UTM 19S para medir en metros/hectáreas
+    gdf_pob_utm = gdf_pob.to_crs(32719)
+    
+    # 2. Cargar el raster de severidad y crear una máscara binaria (quemado vs no quemado)
+    with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
+        # Aquí asumimos que los valores del raster indican severidad
+        # Necesitamos la geometría de este raster. 
+        # Un truco eficiente es usar geopandas para el área poblada y calcular qué parte de ella 
+        # intersecta con la máscara del raster.
+        pass # (Nota: Este cálculo es computacionalmente intensivo)
