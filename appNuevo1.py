@@ -220,7 +220,8 @@ if show_pobladas and (DATA / "AreasPobladas.shp").exists():
     gdf_pob = gpd.read_file(DATA / "AreasPobladas.shp").to_crs(4326)
     folium.GeoJson(
         gdf_pob, name="🏙️ Áreas Pobladas",
-        style_function=lambda x: {"fillColor": "#B22222", "color": "#7A1515", "weight": 1.5, "fillOpacity": 0.45},
+        # Cambiamos fillColor a azul acero y color de borde a azul oscuro
+        style_function=lambda x: {"fillColor": "#2980B9", "color": "#1C5980", "weight": 1.5, "fillOpacity": 0.5},
         tooltip=folium.GeoJsonTooltip(fields=list(gdf_pob.columns[:2])) if len(gdf_pob.columns) > 1 else "Área Poblada"
     ).add_to(m)
 
