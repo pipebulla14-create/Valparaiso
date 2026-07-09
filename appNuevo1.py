@@ -248,13 +248,13 @@ folium.LayerControl(collapsed=False).add_to(m)
 st_folium(m, width=1200, height=650)
 
 # ─────────────────────────────────────────────────────────────
-# 9. DASHBOARD: ESTADÍSTICAS Y GRÁFICOS INTERACTIVOS (Final)
+# 9. DASHBOARD: ESTADÍSTICAS Y GRÁFICOS INTERACTIVOS
 # ─────────────────────────────────────────────────────────────
 st.markdown("---")
 st.header("📊 Análisis Territorial Detallado")
 
 try:
-    # 9.1 MÉTRICAS GLOBALES
+    # 9.1 MÉTRICAS GLOBALES (3 Columnas ahora)
     col_m1, col_m2, col_m3 = st.columns(3)
     
     with col_m1:
@@ -269,38 +269,22 @@ try:
             st.metric("🔥 Superficie Total Quemada", f"{ha_quemadas:,.1f} ha")
             
     with col_m3:
-        # 9.4 CÁLCULO DE ÁREA POBLADA QUEMADA (Con diagnóstico)
-    if show_pobladas and show_severidad and 'gdf_pob' in locals():
-        with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
-            # Reproyectamos poblados al CRS del raster
-            gdf_pob_proj = gdf_pob.to_crs(src.crs)
-            
-            # Verificamos si los polígonos intersectan realmente con el raster
-            if not gdf_pob_proj.intersects(gpd.GeoSeries([gpd.box(*src.bounds)], crs=src.crs)).any():
-                st.warning("⚠️ El shapefile de Áreas Pobladas no intersecta con el raster.")
-            else:
-                geoms = gdf_pob_proj.geometry.values
-                from rasterio.mask import mask
-                
-                # Recortamos el raster
-                out_image, _ = mask(src, geoms, crop=True, nodata=0)
-                
-                # DIAGNÓSTICO: Ver qué valores hay en el raster recortado
-                valores_unicos = np.unique(out_image)
-                st.write(f"Valores detectados en la máscara: {valores_unicos}")
-                
-                # Contamos píxeles quemados (si tus valores son 1, 2, 3 o > 0.10)
-                area_pixel_ha = abs(src.res[0] * src.res[1]) / 10000
-                
-                # Ajuste según si tu raster usa enteros (1,2,3) o decimales
-                if max(valores_unicos) > 5:
-                    # Si usa valores altos (ej. 100-500)
-                    ha_urbana_quemada = np.sum(out_image[0] >= 100) * area_pixel_ha
-                else:
-                    # Si usa valores decimales (0.1, 0.2, etc)
+        # 9.4 CÁLCULO DE ÁREA POBLADA QUEMADA (Dentro de la columna)
+        if show_pobladas and show_severidad and 'gdf_pob' in locals():
+            with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
+                gdf_pob_proj = gdf_pob.to_crs(src.crs)
+                if gdf_pob_proj.intersects(gpd.GeoSeries([gpd.box(*src.bounds)], crs=src.crs)).any():
+                    geoms = gdf_pob_proj.geometry.values
+                    out_image, _ = mask(src, geoms, crop=True, nodata=0)
+                    area_pixel_ha = abs(src.res[0] * src.res[1]) / 10000
+                    # Calculamos usando el valor real detectado
                     ha_urbana_quemada = np.sum(out_image[0] > 0.1) * area_pixel_ha
-                    
-                st.metric("🏘️ Área Poblada Quemada", f"{ha_urbana_quemada:,.1f} ha")
+                    st.metric("🏘️ Área Poblada Quemada", f"{ha_urbana_quemada:,.1f} ha")
+                else:
+                    st.metric("🏘️ Área Poblada Quemada", "N/A")
+
+    st.markdown("---")
+    col_tabla, col_grafico = st.columns(2)
 
     # 9.2 TABLA DE ATRIBUTOS
     if show_pobladas and 'gdf_pob' in locals():
@@ -310,15 +294,22 @@ try:
                 "objectid": "ID", "st_area_sh": "Área (m²)", "st_length_": "Perímetro (m)", "comuna": "Comuna"
             })
             st.dataframe(df_limpio, height=350, use_container_width=True)
-            csv = df_limpio.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Descargar CSV", data=csv, file_name='areas_pobladas.csv', mime='text/csv')
 
-    # 9.3 GRÁFICO DE BARRAS
+    # 9.3 GRÁFICO DE BARRAS DE SEVERIDAD
     if show_severidad and (DATA / "VALPO_severidad_dNBR_solo_quemado.tif").exists():
         with col_grafico:
             st.subheader("🔥 Superficie por Nivel de Daño")
-            # ... (código del gráfico de barras que ya tenías)
-            # (Mantén el código del gráfico de barras que te funcionó en el paso anterior aquí)
+            with rasterio.open(DATA / "VALPO_severidad_dNBR_solo_quemado.tif") as src:
+                banda = src.read(1); valido = (banda != 0) & (~np.isnan(banda))
+                area_pixel_ha = abs(src.res[0] * src.res[1]) / 10000
+                ha_baja = np.sum((banda >= 0.1) & (banda < 0.27) & valido) * area_pixel_ha
+                ha_mod = np.sum((banda >= 0.27) & (banda < 0.44) & valido) * area_pixel_ha
+                ha_alta = np.sum((banda >= 0.44) & valido) * area_pixel_ha
+                
+                fig, ax = plt.subplots(figsize=(8, 4))
+                ax.bar(['Baja', 'Moderada', 'Alta'], [ha_baja, ha_mod, ha_alta], color=['#FFFF00', '#FF9900', '#FF0000'], edgecolor='black')
+                ax.set_ylabel("Hectáreas (ha)")
+                st.pyplot(fig)
 
 except Exception as e:
-    st.error(f"Error al cargar el dashboard: {e}")
+    st.error(f"Error en dashboard: {e}")
